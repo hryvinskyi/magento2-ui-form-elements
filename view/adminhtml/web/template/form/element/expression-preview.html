@@ -1,0 +1,35 @@
+<!--
+  ~ Copyright (c) 2026. Volodymyr Hryvinskyi. All rights reserved.
+  ~ Author: Volodymyr Hryvinskyi <volodymyr@hryvinskyi.com>
+  ~ GitHub: https://github.com/hryvinskyi
+  -->
+
+<!--
+    Renders ONE node of the structured preview tree and recurses into child groups.
+
+    Rendered with a plain data object {node, builder}, under the same fixed-scope contract as the
+    group template: bare names resolve only at this template's own root; inside the children
+    foreach the component is $parent.builder, and the recursive include rebuilds the data object
+    for the child group. Every token is emitted through a text binding — node tokens are
+    pre-rendered label strings, never markup — and each child carries the joiner word that
+    precedes it, so no binding ever needs to reach back to the owning group node.
+-->
+<!-- ko ifnot: node.root -->
+<span class="ufe-expr__preview-paren">(</span>
+<!-- /ko -->
+<!-- ko foreach: { data: node.children, as: 'child' } -->
+    <!-- ko if: child.joiner -->
+    <span class="ufe-expr__preview-joiner" data-bind="text: child.joiner"></span>
+    <!-- /ko -->
+    <!-- ko if: child.kind === 'condition' -->
+    <span class="ufe-expr__preview-field" data-bind="text: child.field"></span>
+    <span class="ufe-expr__preview-op" data-bind="text: child.operator"></span>
+    <span class="ufe-expr__preview-value" data-bind="text: child.value"></span>
+    <!-- /ko -->
+    <!-- ko if: child.kind === 'group' -->
+    <span data-bind="template: { name: 'Hryvinskyi_UiFormElements/form/element/expression-preview', data: { node: child, builder: $parent.builder } }"></span>
+    <!-- /ko -->
+<!-- /ko -->
+<!-- ko ifnot: node.root -->
+<span class="ufe-expr__preview-paren">)</span>
+<!-- /ko -->

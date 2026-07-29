@@ -1,0 +1,1124 @@
+<!--
+  ~ Copyright (c) 2026. Volodymyr Hryvinskyi. All rights reserved.
+  ~ Author: Volodymyr Hryvinskyi <volodymyr@hryvinskyi.com>
+  ~ GitHub: https://github.com/hryvinskyi
+  -->
+
+<!--
+    Renders ONE group of the expression tree and recurses into child groups.
+
+    Binding-context rule: this template is rendered with a plain data object {group, builder, depth},
+    so every call to the component goes through `builder` at a FIXED distance relative to this
+    template's own structure — `builder.…` at the template root (where $data is the data object),
+    `$parent.builder.…` inside the children foreach (row level), and `$parents[1].builder.…` one
+    foreach deeper (pills / options / suggestions). The distances never change with nesting, because
+    every recursion level re-renders this template with a fresh data object at its own root. Never
+    use Knockout's root-context shortcut, and never count context levels up to the component.
+
+    Dropdown rule: every dropdown variant below shares one interaction contract. The list
+    CONTAINER swallows mousedown (keepInputFocus), which keeps focus in the bound input for the
+    whole click — so every entry commits on `click`, blur closes the list immediately, and picking
+    several values in a row keeps the list open. Entry ids come from the component so the input's
+    aria-activedescendant can address them, and the keyboard walks exactly the list the template
+    renders, through the component's own accessors.
+
+    Dropdown OWNERSHIP: a row hosts more than one combobox — the Attribute picker beside a value
+    editor that may itself be one — and they share the row's open flag and highlight. So every
+    dropdown names itself: its focus handler passes its control name to the opener, and its render
+    condition and its comboboxAttrs pass the same name, which is what keeps one focused input from
+    opening two lists. The value editors are collectively 'value' (they are mutually exclusive
+    branches); the two searchable single-selects are 'attribute' and 'value-select', the names the
+    component's registry keys their option source and commit action by. Their QUERIES are separate
+    observables — searchText for the value editors, comboQuery for the single-selects — because the
+    pill editors bind theirs two-way, so one shared observable showed each control's typing in the
+    other's input.
+
+    Reorder rule: every node — row and non-root group — carries a drag handle bound to POINTER
+    events only (pointerdown/pointermove/pointerup/lostpointercapture); the handle captures the
+    pointer, so those four cover the whole gesture without a document-level listener. Nothing else
+    in this template starts a drag, and the drop indicators are ordinary elements, one per insertion
+    gap, taken out of the flow — so showing one cannot reflow the layout the drop maths just
+    measured. The same handle answers ArrowUp/ArrowDown, which is the keyboard's entire share of
+    reordering.
+
+    Wording rule: no user-visible phrase is written into this file as a raw attribute. Static text
+    CONTENT uses the `i18n` binding, which translates the literal in place; everything an attribute
+    carries — placeholder, title, aria-label — comes from a component accessor through a binding,
+    because a phrase written straight into an attribute is translated by nothing. Attribute NAMES
+    stay in the markup even when their value is bound, so the accessible names remain readable here.
+    Phrases a consumer configures (a field's placeholder, option and operator labels) arrive already
+    translated and are bound as they came.
+-->
+<div class="ufe-expr__group"
+     data-bind="css: {
+                    'ufe-expr__group--any': group.aggregator() === 'any',
+                    'ufe-expr__group--dragging': builder.isDragging(group)
+                },
+                attr: {
+                    id: builder.nodeDomId(group),
+                    role: depth > 1 ? 'group' : null,
+                    'aria-label': depth > 1 ? builder.nestedGroupLabel() : null
+                }">
+    <!-- Drop indicator for the gap directly above this group. Out of flow, so it appears and
+         disappears without moving anything. -->
+    <div class="ufe-expr__drop-indicator" data-bind="visible: builder.isDropSlotBefore(group)"></div>
+    <!-- One live region for the whole builder, rendered by the root group only and always present:
+         a region inserted together with its first message is announced only by chance. It reports
+         where a moved node landed — the one thing a reorder changes that is otherwise invisible
+         without sight of the rendered order. -->
+    <!-- ko if: depth === 1 -->
+    <div class="ufe-expr__move-status" role="status" aria-live="polite" data-bind="text: builder.moveAnnouncement"></div>
+    <!-- /ko -->
+    <div class="ufe-expr__group-header">
+        <!-- ko if: depth > 1 -->
+        <button type="button"
+                class="ufe-expr__drag"
+                data-bind="attr: {
+                               id: builder.dragHandleDomId(group),
+                               title: builder.groupDragTitle(),
+                               'aria-label': builder.groupDragLabel()
+                           },
+                           event: {
+                               pointerdown: function (data, e) { return builder.startDrag(group, e); },
+                               pointermove: function (data, e) { return builder.dragMove(e); },
+                               pointerup: function () { return builder.endDrag(); },
+                               lostpointercapture: function () { return builder.cancelDrag(); },
+                               keydown: function (data, e) { return builder.handleDragKeydown(group, e); }
+                           }">
+            <span class="ufe-expr__icon ufe-expr__icon--grip" aria-hidden="true"></span>
+        </button>
+        <!-- /ko -->
+        <div class="ufe-expr__aggregator-pair">
+            <button type="button"
+                    class="ufe-expr__aggregator-btn"
+                    data-bind="click: function () { group.aggregator('all'); },
+                               css: { 'ufe-expr__aggregator-btn--active': group.aggregator() === 'all' },
+                               attr: {
+                                   title: builder.aggregatorTitle('all'),
+                                   'aria-label': builder.aggregatorButtonLabel('all'),
+                                   'aria-pressed': builder.ariaFlag(group.aggregator() === 'all')
+                               }">
+                <span data-bind="i18n: 'ALL'"></span>
+            </button>
+            <button type="button"
+                    class="ufe-expr__aggregator-btn"
+                    data-bind="click: function () { group.aggregator('any'); },
+                               css: { 'ufe-expr__aggregator-btn--active': group.aggregator() === 'any' },
+                               attr: {
+                                   title: builder.aggregatorTitle('any'),
+                                   'aria-label': builder.aggregatorButtonLabel('any'),
+                                   'aria-pressed': builder.ariaFlag(group.aggregator() === 'any')
+                               }">
+                <span data-bind="i18n: 'ANY'"></span>
+            </button>
+        </div>
+        <span class="ufe-expr__group-heading" data-bind="text: builder.groupHeading(group)"></span>
+        <!-- The group's contents, stated where the eye checks it: direct rows and direct child
+             groups. Right-aligned so it also parks the header actions of a nested group. -->
+        <span class="ufe-expr__group-summary" data-bind="text: builder.groupSummary(group)"></span>
+        <!-- ko if: depth > 1 -->
+        <span class="ufe-expr__group-actions">
+            <button type="button"
+                    class="ufe-expr__group-duplicate"
+                    data-bind="click: function () { builder.duplicateGroup(group); },
+                               attr: {
+                                   title: builder.duplicateGroupLabel(),
+                                   'aria-label': builder.duplicateGroupLabel()
+                               }">
+                <span class="ufe-expr__icon ufe-expr__icon--copy" aria-hidden="true"></span>
+            </button>
+            <button type="button"
+                    class="ufe-expr__group-remove"
+                    data-bind="click: function () { builder.removeGroup(group); },
+                               attr: {
+                                   id: builder.groupRemoveDomId(group),
+                                   title: builder.removeGroupLabel(),
+                                   'aria-label': builder.removeGroupLabel()
+                               }">
+                <span class="ufe-expr__icon ufe-expr__icon--x" aria-hidden="true"></span>
+            </button>
+        </span>
+        <!-- /ko -->
+    </div>
+
+    <!-- The group body: an optional joiner rail beside the children column. The rail is rendered
+         always and shown only under the rail treatment (a root modifier class the stylesheet
+         reads); it is decorative — the group's heading has already stated the aggregator in
+         words — so it is hidden from assistive technology whole. -->
+    <div class="ufe-expr__group-body">
+        <div class="ufe-expr__rail" aria-hidden="true">
+            <span class="ufe-expr__rail-word" data-bind="text: builder.groupAggregatorWord(group)"></span>
+        </div>
+        <div class="ufe-expr__group-main">
+        <!-- Column captions of the row grid, once per group instead of a label per row. Hidden
+             from assistive technology: every editor names itself, so these are purely the sighted
+             reader's grid header — and they caption nothing over a group holding only groups. -->
+        <!-- ko if: builder.groupHasConditionRows(group) -->
+        <div class="ufe-expr__colhead" aria-hidden="true">
+            <span class="ufe-expr__colhead-gutter"></span>
+            <div class="ufe-expr__colhead-grid">
+                <span class="ufe-expr__colhead-cell" data-bind="i18n: 'Field'"></span>
+                <span class="ufe-expr__colhead-cell" data-bind="i18n: 'Operator'"></span>
+                <span class="ufe-expr__colhead-cell" data-bind="i18n: 'Value'"></span>
+            </div>
+            <span class="ufe-expr__colhead-gutter ufe-expr__colhead-gutter--actions"></span>
+        </div>
+        <!-- /ko -->
+        <div class="ufe-expr__group-children" data-bind="foreach: { data: group.children, as: 'row' }">
+
+        <!-- ko if: $index() > 0 -->
+        <!-- Static connector showing the owning group's aggregator word. Both words are rendered;
+             the modifier class on the group element picks the visible one via CSS, because inside
+             this foreach the group object is out of reach under the fixed-distance rule above.
+             Toggling the aggregator happens only in the group header. Hidden from assistive
+             technology precisely because both words are in the markup — the group's own heading
+             states the aggregator once, in one word. -->
+        <div class="ufe-expr__connector" aria-hidden="true">
+            <span class="ufe-expr__connector-word ufe-expr__connector-word--all"
+                  data-bind="i18n: 'And', attr: { title: $parent.builder.aggregatorTitle('all') }"></span>
+            <span class="ufe-expr__connector-word ufe-expr__connector-word--any"
+                  data-bind="i18n: 'Or', attr: { title: $parent.builder.aggregatorTitle('any') }"></span>
+        </div>
+        <!-- /ko -->
+
+        <!-- ko if: row.kind === 'condition' -->
+        <div class="ufe-expr__row"
+             data-bind="css: { 'ufe-expr__row--dragging': $parent.builder.isDragging(row) },
+                        attr: { id: $parent.builder.nodeDomId(row) }">
+            <!-- Drop indicator for the gap directly above this row. -->
+            <div class="ufe-expr__drop-indicator" data-bind="visible: $parent.builder.isDropSlotBefore(row)"></div>
+            <button type="button"
+                    class="ufe-expr__drag"
+                    data-bind="attr: {
+                                   id: $parent.builder.dragHandleDomId(row),
+                                   title: $parent.builder.rowDragTitle(),
+                                   'aria-label': $parent.builder.rowDragLabel()
+                               },
+                               event: {
+                                   pointerdown: function (data, e) { return $parent.builder.startDrag(row, e); },
+                                   pointermove: function (data, e) { return $parent.builder.dragMove(e); },
+                                   pointerup: function () { return $parent.builder.endDrag(); },
+                                   lostpointercapture: function () { return $parent.builder.cancelDrag(); },
+                                   keydown: function (data, e) { return $parent.builder.handleDragKeydown(row, e); }
+                               }">
+                <span class="ufe-expr__icon ufe-expr__icon--grip" aria-hidden="true"></span>
+            </button>
+            <div class="ufe-expr__triplet">
+                <div class="ufe-expr__col ufe-expr__col--field">
+                    <!-- The Field select carries the row's id: it is the row's first control, so it
+                         is where focus lands when a row is added or duplicated. Every editor names
+                         itself: the group's column captions are plain text bound to no control. -->
+                    <select class="ufe-expr__select"
+                            data-bind="options: $parent.builder.availableFieldsFor(row),
+                                       optionsValue: 'type',
+                                       optionsText: 'label',
+                                       value: row.fieldType,
+                                       attr: {
+                                           id: $parent.builder.rowFieldDomId(row),
+                                           'aria-label': $parent.builder.fieldEditorLabel()
+                                       },
+                                       event: { change: function () { $parent.builder.setField(row, row.fieldType()); } }"></select>
+
+                    <!-- The picker's Attribute control, stacked under the Field select inside the
+                         same grid cell: it narrows the field choice, and a column of its own would
+                         give picker rows a different grid from every other row. -->
+                    <!-- ko if: row.fieldType() === 'product_attribute_picker' -->
+                    <!-- Searchable single-select instead of a `<select>`: this list is the catalogue's whole
+                         attribute set, and its labels repeat — several attributes carry the same display name
+                         and differ only in the prefix of their code — so a native option list can neither be
+                         scanned nor read. Closed, the input shows the chosen label with the code beside it;
+                         focused, it is a combobox over the same list. Committing goes through the very method
+                         the old select's change handler called, so switching attributes still resets the
+                         operator and clears the value. -->
+                    <div class="ufe-expr__combo" data-bind="click: function (data, e) { return $parent.builder.focusComboInput(e); }">
+                        <input type="text"
+                               class="ufe-expr__combo-input"
+                               autocomplete="off"
+                               role="combobox"
+                               aria-autocomplete="list"
+                               data-bind="value: $parent.builder.searchableSelectDisplay(row, 'attribute'),
+                                          attr: $parent.builder.comboboxAttrs(row, row.comboQuery(), $parent.builder.attributeSearchWording(), 'attribute'),
+                                          event: {
+                                              focus: function () { $parent.builder.openSearchableSelect(row, 'attribute'); },
+                                              input: function (data, e) { return $parent.builder.updateSearchableQuery(row, e); },
+                                              keydown: function (data, e) { return $parent.builder.handleValueKeydown(row, e, row.comboQuery()); },
+                                              blur: function () { $parent.builder.closeDropdown(row); }
+                                          }"/>
+                        <!-- The chosen code, and the input's own description — the label alone cannot identify
+                             an attribute here. Always rendered and merely empty while the list is open, so the
+                             description never points at a missing element and the control's height never
+                             changes under the open dropdown. -->
+                        <span class="ufe-expr__combo-code"
+                              data-bind="text: $parent.builder.searchableSelectCode(row, 'attribute'),
+                                         attr: {
+                                             id: $parent.builder.comboCodeDomId(row),
+                                             title: $parent.builder.searchableSelectCode(row, 'attribute')
+                                         }"></span>
+                        <!-- ko if: $parent.builder.dropdownListVisible(row, row.comboQuery(), 'attribute') -->
+                        <ul class="ufe-expr__autocomplete-list"
+                            role="listbox"
+                            data-bind="attr: $parent.builder.listAttrs(row),
+                                       event: { mousedown: function (data, e) { return $parent.builder.keepInputFocus(e); } }">
+                            <!-- ko if: $parent.builder.filteredSearchableOptions(row, 'attribute').items.length === 0 -->
+                            <li class="ufe-expr__autocomplete-empty"
+                                role="option"
+                                aria-disabled="true"
+                                aria-selected="false"
+                                data-bind="i18n: 'No matches'"></li>
+                            <!-- /ko -->
+                            <!-- ko foreach: { data: $parent.builder.filteredSearchableOptions(row, 'attribute').items, as: 'opt' } -->
+                            <!-- Two lines per entry: the label, and under it the code that tells two
+                                 identically-labelled attributes apart. The code is NOT hidden from assistive
+                                 technology — it is the disambiguator, not decoration. -->
+                            <li class="ufe-expr__autocomplete-option"
+                                role="option"
+                                data-bind="click: function () { $parents[1].builder.commitSearchableSelect(row, 'attribute', opt.value); },
+                                           css: { 'ufe-expr__autocomplete-option--active': $parents[1].builder.isActiveOption(row, $index()) },
+                                           attr: $parents[1].builder.optionAttrs(row, $index(), opt.value)">
+                                <span class="ufe-expr__option-label" data-bind="text: opt.label"></span>
+                                <span class="ufe-expr__option-code" data-bind="text: $parents[1].builder.optionCode(opt)"></span>
+                            </li>
+                            <!-- /ko -->
+                            <!-- Non-interactive footer: the ranked result was cut at the cap, so a code that is
+                                 missing from it may still exist further down the list. -->
+                            <!-- ko if: $parent.builder.filteredSearchableOptions(row, 'attribute').capped -->
+                            <li class="ufe-expr__autocomplete-hint"
+                                role="option"
+                                aria-disabled="true"
+                                aria-selected="false"
+                                data-bind="text: $parent.builder.optionCapHint()"></li>
+                            <!-- /ko -->
+                        </ul>
+                        <!-- /ko -->
+                    </div>
+                    <!-- /ko -->
+                </div>
+
+                <div class="ufe-expr__col ufe-expr__col--operator">
+                    <select class="ufe-expr__select"
+                            data-bind="options: $parent.builder.operatorsFor(row),
+                                       optionsValue: 'value',
+                                       optionsText: 'label',
+                                       value: row.operator,
+                                       attr: { 'aria-label': $parent.builder.operatorEditorLabel() }"></select>
+                </div>
+
+                <div class="ufe-expr__col ufe-expr__col--value">
+                    <!-- One option out of a list short enough to scan: the plain control, which the browser
+                         owns entirely — one keystroke to open, native type-to-select, no dropdown to manage. -->
+                    <!-- ko if: $parent.builder.rowUsesPlainValueSelect(row) -->
+                    <select class="ufe-expr__select"
+                            data-bind="options: $parent.builder.valueOptionsFor(row),
+                                       optionsValue: 'value',
+                                       optionsText: 'label',
+                                       value: row.value,
+                                       attr: { 'aria-label': $parent.builder.valueEditorLabel() }"></select>
+                    <!-- /ko -->
+
+                    <!-- The same choice out of a list too long to scan: the searchable combobox the Attribute
+                         control uses, over this field's own options. The threshold is a `defaults` tunable, so
+                         which fields escalate is configuration rather than a list of field types here. -->
+                    <!-- ko if: $parent.builder.rowUsesSearchableValueSelect(row) -->
+                    <div class="ufe-expr__combo" data-bind="click: function (data, e) { return $parent.builder.focusComboInput(e); }">
+                        <input type="text"
+                               class="ufe-expr__combo-input"
+                               autocomplete="off"
+                               role="combobox"
+                               aria-autocomplete="list"
+                               data-bind="value: $parent.builder.searchableSelectDisplay(row, 'value-select'),
+                                          attr: $parent.builder.comboboxAttrs(row, row.comboQuery(), $parent.builder.optionSelectWording(), 'value-select'),
+                                          event: {
+                                              focus: function () { $parent.builder.openSearchableSelect(row, 'value-select'); },
+                                              input: function (data, e) { return $parent.builder.updateSearchableQuery(row, e); },
+                                              keydown: function (data, e) { return $parent.builder.handleValueKeydown(row, e, row.comboQuery()); },
+                                              blur: function () { $parent.builder.closeDropdown(row); }
+                                          }"/>
+                        <span class="ufe-expr__combo-code"
+                              data-bind="text: $parent.builder.searchableSelectCode(row, 'value-select'),
+                                         attr: {
+                                             id: $parent.builder.comboCodeDomId(row),
+                                             title: $parent.builder.searchableSelectCode(row, 'value-select')
+                                         }"></span>
+                        <!-- ko if: $parent.builder.dropdownListVisible(row, row.comboQuery(), 'value-select') -->
+                        <ul class="ufe-expr__autocomplete-list"
+                            role="listbox"
+                            data-bind="attr: $parent.builder.listAttrs(row),
+                                       event: { mousedown: function (data, e) { return $parent.builder.keepInputFocus(e); } }">
+                            <!-- ko if: $parent.builder.filteredSearchableOptions(row, 'value-select').items.length === 0 -->
+                            <li class="ufe-expr__autocomplete-empty"
+                                role="option"
+                                aria-disabled="true"
+                                aria-selected="false"
+                                data-bind="i18n: 'No matches'"></li>
+                            <!-- /ko -->
+                            <!-- ko foreach: { data: $parent.builder.filteredSearchableOptions(row, 'value-select').items, as: 'opt' } -->
+                            <li class="ufe-expr__autocomplete-option"
+                                role="option"
+                                data-bind="click: function () { $parents[1].builder.commitSearchableSelect(row, 'value-select', opt.value); },
+                                           css: { 'ufe-expr__autocomplete-option--active': $parents[1].builder.isActiveOption(row, $index()) },
+                                           attr: $parents[1].builder.optionAttrs(row, $index(), opt.value)">
+                                <span class="ufe-expr__option-label" data-bind="text: opt.label"></span>
+                                <span class="ufe-expr__option-code" data-bind="text: $parents[1].builder.optionCode(opt)"></span>
+                            </li>
+                            <!-- /ko -->
+                            <!-- ko if: $parent.builder.filteredSearchableOptions(row, 'value-select').capped -->
+                            <li class="ufe-expr__autocomplete-hint"
+                                role="option"
+                                aria-disabled="true"
+                                aria-selected="false"
+                                data-bind="text: $parent.builder.optionCapHint()"></li>
+                            <!-- /ko -->
+                        </ul>
+                        <!-- /ko -->
+                    </div>
+                    <!-- /ko -->
+
+                    <!-- ko if: $parent.builder.valueTypeFor(row) === 'multiselect' || ($parent.builder.valueTypeFor(row) === 'select' && $parent.builder.rowUsesListOperator(row)) -->
+                    <div class="ufe-expr__autocomplete">
+                        <!-- Pill row: the visible pills, the overflow toggle for long lists, the
+                             search input (which also accepts a pasted list) and clear-all. -->
+                        <div class="ufe-expr__pills">
+                            <!-- ko foreach: { data: $parent.builder.visiblePills(row, $parent.builder.selectedOptionsFor(row)), as: 'sel' } -->
+                            <span class="ufe-expr__pill">
+                                <span data-bind="text: $parents[1].builder.displayLabel(sel.label),
+                                                 attr: { title: $parents[1].builder.pathLabelFor(row, sel.value) }"></span>
+                                <button type="button"
+                                        class="ufe-expr__pill-remove"
+                                        data-bind="click: function () { $parents[1].builder.removeOption(row, sel.value); },
+                                                   attr: {
+                                                       title: $parents[1].builder.pillRemoveTitle(),
+                                                       'aria-label': $parents[1].builder.pillRemoveLabel(sel.label)
+                                                   }">
+                                    <span class="ufe-expr__icon ufe-expr__icon--x" aria-hidden="true"></span>
+                                </button>
+                            </span>
+                            <!-- /ko -->
+                            <!-- ko if: $parent.builder.pillToggleLabel(row, $parent.builder.selectedOptionsFor(row)) !== '' -->
+                            <button type="button"
+                                    class="ufe-expr__pill ufe-expr__pill--more"
+                                    data-bind="text: $parent.builder.pillToggleLabel(row, $parent.builder.selectedOptionsFor(row)),
+                                               click: function () { $parent.builder.togglePills(row); },
+                                               attr: {
+                                                   'aria-expanded': $parent.builder.ariaFlag(row.pillsExpanded()),
+                                                   'aria-label': $parent.builder.pillToggleAriaLabel(row, $parent.builder.selectedOptionsFor(row))
+                                               }"></button>
+                            <!-- /ko -->
+                            <input type="text"
+                                   class="ufe-expr__autocomplete-input"
+                                   role="combobox"
+                                   aria-autocomplete="list"
+                                   data-bind="textInput: row.searchText,
+                                              attr: $parent.builder.comboboxAttrs(row, row.searchText(), $parent.builder.optionSearchWording(), 'value'),
+                                              event: {
+                                                  focus: function () { $parent.builder.openDropdown(row, 'value'); },
+                                                  keydown: function (data, e) { return $parent.builder.handleValueKeydown(row, e, row.searchText()); },
+                                                  paste: function (data, e) { return $parent.builder.handlePaste(row, e, 'options'); },
+                                                  blur: function () { $parent.builder.closeDropdown(row); }
+                                              }"/>
+                            <!-- ko if: $parent.builder.canClearAll(row) -->
+                            <button type="button"
+                                    class="ufe-expr__clear-all"
+                                    data-bind="click: function () { $parent.builder.clearAllValues(row); },
+                                               attr: {
+                                                   title: $parent.builder.clearAllTitle(),
+                                                   'aria-label': $parent.builder.clearAllLabel()
+                                               }">
+                                <span data-bind="i18n: 'Clear all'"></span>
+                            </button>
+                            <!-- /ko -->
+                        </div>
+                        <!-- The paste report is a live region, so it is always rendered and hidden
+                             while empty: a region inserted together with its text is announced
+                             only by chance. -->
+                        <div class="ufe-expr__autocomplete-hint"
+                             role="status"
+                             data-bind="text: row.pasteNotice, visible: row.pasteNotice() !== ''"></div>
+                        <!-- ko if: $parent.builder.dropdownListVisible(row, row.searchText(), 'value') -->
+                        <!-- The PANEL, not the list, swallows mousedown to hold the input's focus: the tree's
+                             header row sits beside the listbox rather than inside it — buttons are not valid
+                             option content — and a press on those buttons must not blur the input either. -->
+                        <div class="ufe-expr__dropdown"
+                             data-bind="event: { mousedown: function (data, e) { return $parent.builder.keepInputFocus(e); } }">
+                            <!-- ko if: $parent.builder.rowShowsTree(row) -->
+                            <div class="ufe-expr__tree-actions">
+                                <!-- Expanding everything is withdrawn above the configured list size, where it would
+                                     render the whole hierarchy in one go; its sibling's tooltip then carries the
+                                     reason, and the per-node carets still reach every branch. -->
+                                <!-- ko if: $parent.builder.canExpandAllTreeNodes(row) -->
+                                <button type="button"
+                                        class="ufe-expr__tree-action"
+                                        tabindex="-1"
+                                        data-bind="click: function () { $parent.builder.expandAllTreeNodes(row); }">
+                                    <span data-bind="i18n: 'Expand all'"></span>
+                                </button>
+                                <!-- /ko -->
+                                <button type="button"
+                                        class="ufe-expr__tree-action"
+                                        tabindex="-1"
+                                        data-bind="click: function () { $parent.builder.collapseAllTreeNodes(row); },
+                                                   attr: { title: $parent.builder.collapseAllTreeTitle(row) }">
+                                    <span data-bind="i18n: 'Collapse all'"></span>
+                                </button>
+                                <!-- How many values the row stores — the pills spelling them sit
+                                     above the dropdown, outside a scrolled branch's view. -->
+                                <span class="ufe-expr__tree-selected" data-bind="text: $parent.builder.selectedCountText(row)"></span>
+                            </div>
+                            <!-- /ko -->
+                            <ul class="ufe-expr__autocomplete-list"
+                                role="listbox"
+                                data-bind="attr: $parent.builder.listAttrs(row)">
+                                <!-- Hierarchy-annotated options with no search text: collapsible tree. Every row is a
+                                     checkbox-style toggle: clicking it selects the node, clicking it again deselects. The
+                                     caret at the right edge is the only part that expands instead. Selected nodes stay on
+                                     screen, so their subtrees remain reachable. -->
+                                <!-- ko if: $parent.builder.rowShowsTree(row) -->
+                                <!-- ko foreach: { data: $parent.builder.visibleTreeNodes(row), as: 'node' } -->
+                                <li class="ufe-expr__tree-node"
+                                    role="option"
+                                    data-bind="css: {
+                                                   'ufe-expr__tree-node--selected': node.selected,
+                                                   'ufe-expr__tree-node--parent': node.hasChildren,
+                                                   'ufe-expr__tree-node--active': $parents[1].builder.isActiveOption(row, $index())
+                                               },
+                                               style: { paddingLeft: node.indent },
+                                               attr: $parents[1].builder.treeNodeAttrs(row, $index(), node),
+                                               click: function () { $parents[1].builder.toggleTreeNode(row, node.value); }">
+                                    <!-- ko if: node.hasChildren -->
+                                    <!-- Expanding has its own target at the row's left edge — where every tree UI keeps
+                                         it — and stops the click there: the row around it toggles selection, so a caret
+                                         that let the event bubble would do both at once. Not a tab stop — the input keeps
+                                         focus while the list is open, and the tree's own arrow keys reach this. -->
+                                    <button type="button"
+                                            class="ufe-expr__tree-toggle"
+                                            tabindex="-1"
+                                            data-bind="css: { 'ufe-expr__tree-toggle--open': node.expanded },
+                                                       click: function (data, e) { $parents[1].builder.toggleNode(row, node.value); e.stopPropagation(); },
+                                                       attr: { 'aria-label': $parents[1].builder.treeToggleLabel(node) }">
+                                        <span class="ufe-expr__icon ufe-expr__icon--chevron" aria-hidden="true"></span>
+                                    </button>
+                                    <!-- /ko -->
+                                    <!-- ko ifnot: node.hasChildren -->
+                                    <!-- A leaf renders the caret's box empty, so labels and badges keep one grid. -->
+                                    <span class="ufe-expr__tree-toggle ufe-expr__tree-toggle--leaf" aria-hidden="true"></span>
+                                    <!-- /ko -->
+                                    <!-- Selection state drawn as a checkbox, deliberately decorative: the row itself IS the
+                                         option and its aria-selected is what announces the state, so a checkbox role here
+                                         would nest one control inside another and say the same thing twice. -->
+                                    <span class="ufe-expr__tree-check"
+                                          aria-hidden="true"
+                                          data-bind="css: {
+                                                         'ufe-expr__tree-check--checked': node.selected,
+                                                         'ufe-expr__tree-check--mixed': node.mixed
+                                                     }"></span>
+                                    <span class="ufe-expr__tree-node-label" data-bind="text: node.label"></span>
+                                    <!-- How much sits below this branch. A leaf renders no badge, so the column reads as
+                                         "there is more inside this one" instead of as a count printed against every name. -->
+                                    <!-- ko if: node.descendants > 0 -->
+                                    <span class="ufe-expr__tree-count"
+                                          data-bind="text: node.descendants,
+                                                     attr: { title: $parents[1].builder.treeCountTitle(node) }"></span>
+                                    <!-- /ko -->
+                                </li>
+                                <!-- /ko -->
+                                <!-- /ko -->
+                                <!-- Flat filtered list: plain option lists always, hierarchical ones
+                                     while searching — matches then show their breadcrumb path. -->
+                                <!-- ko ifnot: $parent.builder.rowShowsTree(row) -->
+                                <!-- ko if: $parent.builder.filteredOptionsFor(row).items.length === 0 -->
+                                <li class="ufe-expr__autocomplete-empty"
+                                    role="option"
+                                    aria-disabled="true"
+                                    aria-selected="false"
+                                    data-bind="i18n: 'No matches'"></li>
+                                <!-- /ko -->
+                                <!-- ko foreach: { data: $parent.builder.filteredOptionsFor(row).items, as: 'opt' } -->
+                                <li class="ufe-expr__autocomplete-option"
+                                    role="option"
+                                    data-bind="click: function () { $parents[1].builder.addOption(row, opt.value); },
+                                               text: $parents[1].builder.pathLabelFor(row, opt.value),
+                                               css: { 'ufe-expr__autocomplete-option--active': $parents[1].builder.isActiveOption(row, $index()) },
+                                               attr: $parents[1].builder.optionAttrs(row, $index(), opt.value)"></li>
+                                <!-- /ko -->
+                                <!-- Non-interactive footer: the match list was truncated, so a value
+                                     that is missing from it may still exist further down the catalogue. -->
+                                <!-- ko if: $parent.builder.filteredOptionsFor(row).capped -->
+                                <li class="ufe-expr__autocomplete-hint"
+                                    role="option"
+                                    aria-disabled="true"
+                                    aria-selected="false"
+                                    data-bind="text: $parent.builder.optionCapHint()"></li>
+                                <!-- /ko -->
+                                <!-- /ko -->
+                            </ul>
+                            <!-- Footer of the panel: what a click does in the current mode, and an
+                                 explicit way out. The panel's focus guard covers this row too, so
+                                 pressing Done never blurs the input before the click lands. Not a
+                                 tab stop — the input keeps focus while the list is open, and the
+                                 keyboard's way out is Escape. -->
+                            <div class="ufe-expr__dropdown-footer">
+                                <span class="ufe-expr__dropdown-hint" data-bind="text: $parent.builder.dropdownFooterHint(row)"></span>
+                                <button type="button"
+                                        class="ufe-expr__dropdown-done"
+                                        tabindex="-1"
+                                        data-bind="click: function () { $parent.builder.closeDropdown(row); }">
+                                    <span data-bind="i18n: 'Done'"></span>
+                                </button>
+                            </div>
+                        </div>
+                        <!-- /ko -->
+                    </div>
+                    <!-- /ko -->
+
+                    <!-- ko if: $parent.builder.valueTypeFor(row) === 'text' -->
+                    <!-- The placeholder is the field's own, straight from the consumer's config:
+                         only the consumer knows what shape of text this field expects. The unit
+                         beside the input is the field's too, and absent for fields that name none. -->
+                    <div class="ufe-expr__unit-row">
+                        <input type="text"
+                               class="ufe-expr__input"
+                               data-bind="textInput: row.value,
+                                          attr: {
+                                              placeholder: $parent.builder.placeholderFor(row),
+                                              'aria-label': $parent.builder.valueEditorLabel()
+                                          }"/>
+                        <!-- ko if: $parent.builder.rowUnit(row) !== '' -->
+                        <span class="ufe-expr__unit" data-bind="text: $parent.builder.rowUnit(row)"></span>
+                        <!-- /ko -->
+                    </div>
+                    <!-- /ko -->
+
+                    <!-- ko if: $parent.builder.valueTypeFor(row) === 'product-attribute' -->
+                        <!-- The attribute's option list is on its way — descriptors ship without
+                             their lists, and the fetch starts the moment the attribute is
+                             selected. The placeholder holds the editor's place so the option-less
+                             fallbacks below cannot flash for the length of one round-trip. -->
+                        <!-- ko if: $parent.builder.attributeOptionsPending(row) -->
+                        <div class="ufe-expr__value-loading">
+                            <span data-bind="i18n: 'Loading values…'"></span>
+                        </div>
+                        <!-- /ko -->
+
+                        <!-- Attribute has a predefined option list (select/multiselect/boolean), single value:
+                             the plain control while the attribute's list is short enough to scan — same
+                             threshold rule as a select field's value, judged per selected attribute. -->
+                        <!-- ko if: $parent.builder.rowUsesPlainAttributeValueSelect(row) -->
+                        <select class="ufe-expr__select"
+                                data-bind="options: $parent.builder.productAttributeInfo(row).options,
+                                           optionsValue: 'value',
+                                           optionsText: 'label',
+                                           optionsCaption: $parent.builder.selectCaption(),
+                                           value: row.value,
+                                           attr: { 'aria-label': $parent.builder.valueEditorLabel() }"></select>
+                        <!-- /ko -->
+
+                        <!-- The same choice once the attribute's list is too long to scan: the searchable
+                             combobox the Attribute control uses, over this attribute's own options — a
+                             brand list runs as long as any select field's, and the option ids beneath the
+                             labels are what tell two same-named entries apart. -->
+                        <!-- ko if: $parent.builder.rowUsesSearchableAttributeValueSelect(row) -->
+                        <div class="ufe-expr__combo" data-bind="click: function (data, e) { return $parent.builder.focusComboInput(e); }">
+                            <input type="text"
+                                   class="ufe-expr__combo-input"
+                                   autocomplete="off"
+                                   role="combobox"
+                                   aria-autocomplete="list"
+                                   data-bind="value: $parent.builder.searchableSelectDisplay(row, 'attribute-value'),
+                                              attr: $parent.builder.comboboxAttrs(row, row.comboQuery(), $parent.builder.optionSelectWording(), 'attribute-value'),
+                                              event: {
+                                                  focus: function () { $parent.builder.openSearchableSelect(row, 'attribute-value'); },
+                                                  input: function (data, e) { return $parent.builder.updateSearchableQuery(row, e); },
+                                                  keydown: function (data, e) { return $parent.builder.handleValueKeydown(row, e, row.comboQuery()); },
+                                                  blur: function () { $parent.builder.closeDropdown(row); }
+                                              }"/>
+                            <span class="ufe-expr__combo-code"
+                                  data-bind="text: $parent.builder.searchableSelectCode(row, 'attribute-value'),
+                                             attr: {
+                                                 id: $parent.builder.comboCodeDomId(row),
+                                                 title: $parent.builder.searchableSelectCode(row, 'attribute-value')
+                                             }"></span>
+                            <!-- ko if: $parent.builder.dropdownListVisible(row, row.comboQuery(), 'attribute-value') -->
+                            <ul class="ufe-expr__autocomplete-list"
+                                role="listbox"
+                                data-bind="attr: $parent.builder.listAttrs(row),
+                                           event: { mousedown: function (data, e) { return $parent.builder.keepInputFocus(e); } }">
+                                <!-- ko if: $parent.builder.filteredSearchableOptions(row, 'attribute-value').items.length === 0 -->
+                                <li class="ufe-expr__autocomplete-empty"
+                                    role="option"
+                                    aria-disabled="true"
+                                    aria-selected="false"
+                                    data-bind="i18n: 'No matches'"></li>
+                                <!-- /ko -->
+                                <!-- ko foreach: { data: $parent.builder.filteredSearchableOptions(row, 'attribute-value').items, as: 'opt' } -->
+                                <li class="ufe-expr__autocomplete-option"
+                                    role="option"
+                                    data-bind="click: function () { $parents[1].builder.commitSearchableSelect(row, 'attribute-value', opt.value); },
+                                               css: { 'ufe-expr__autocomplete-option--active': $parents[1].builder.isActiveOption(row, $index()) },
+                                               attr: $parents[1].builder.optionAttrs(row, $index(), opt.value)">
+                                    <span class="ufe-expr__option-label" data-bind="text: opt.label"></span>
+                                    <span class="ufe-expr__option-code" data-bind="text: $parents[1].builder.optionCode(opt)"></span>
+                                </li>
+                                <!-- /ko -->
+                                <!-- ko if: $parent.builder.filteredSearchableOptions(row, 'attribute-value').capped -->
+                                <li class="ufe-expr__autocomplete-hint"
+                                    role="option"
+                                    aria-disabled="true"
+                                    aria-selected="false"
+                                    data-bind="text: $parent.builder.optionCapHint()"></li>
+                                <!-- /ko -->
+                            </ul>
+                            <!-- /ko -->
+                        </div>
+                        <!-- /ko -->
+
+                        <!-- Multi-value operator (is one of / is not one of) on a select-type attribute. -->
+                        <!-- ko if: $parent.builder.productAttributeHasOptions(row) && $parent.builder.rowUsesListOperator(row) -->
+                        <div class="ufe-expr__autocomplete">
+                            <div class="ufe-expr__pills">
+                                <!-- ko foreach: { data: $parent.builder.visiblePills(row, $parent.builder.selectedProductAttributeOptions(row)), as: 'sel' } -->
+                                <span class="ufe-expr__pill">
+                                    <span data-bind="text: $parents[1].builder.displayLabel(sel.label),
+                                                     attr: { title: $parents[1].builder.pathLabelFor(row, sel.value) }"></span>
+                                    <button type="button"
+                                            class="ufe-expr__pill-remove"
+                                            data-bind="click: function () { $parents[1].builder.removeOption(row, sel.value); },
+                                                       attr: {
+                                                           title: $parents[1].builder.pillRemoveTitle(),
+                                                           'aria-label': $parents[1].builder.pillRemoveLabel(sel.label)
+                                                       }">
+                                        <span class="ufe-expr__icon ufe-expr__icon--x" aria-hidden="true"></span>
+                                    </button>
+                                </span>
+                                <!-- /ko -->
+                                <!-- ko if: $parent.builder.pillToggleLabel(row, $parent.builder.selectedProductAttributeOptions(row)) !== '' -->
+                                <button type="button"
+                                        class="ufe-expr__pill ufe-expr__pill--more"
+                                        data-bind="text: $parent.builder.pillToggleLabel(row, $parent.builder.selectedProductAttributeOptions(row)),
+                                                   click: function () { $parent.builder.togglePills(row); },
+                                                   attr: {
+                                                       'aria-expanded': $parent.builder.ariaFlag(row.pillsExpanded()),
+                                                       'aria-label': $parent.builder.pillToggleAriaLabel(row, $parent.builder.selectedProductAttributeOptions(row))
+                                                   }"></button>
+                                <!-- /ko -->
+                                <input type="text"
+                                       class="ufe-expr__autocomplete-input"
+                                       role="combobox"
+                                       aria-autocomplete="list"
+                                       data-bind="textInput: row.searchText,
+                                                  attr: $parent.builder.comboboxAttrs(row, row.searchText(), $parent.builder.optionSearchWording(), 'value'),
+                                                  event: {
+                                                      focus: function () { $parent.builder.openDropdown(row, 'value'); },
+                                                      keydown: function (data, e) { return $parent.builder.handleValueKeydown(row, e, row.searchText()); },
+                                                      paste: function (data, e) { return $parent.builder.handlePaste(row, e, 'options'); },
+                                                      blur: function () { $parent.builder.closeDropdown(row); }
+                                                  }"/>
+                                <!-- ko if: $parent.builder.canClearAll(row) -->
+                                <button type="button"
+                                        class="ufe-expr__clear-all"
+                                        data-bind="click: function () { $parent.builder.clearAllValues(row); },
+                                                   attr: {
+                                                       title: $parent.builder.clearAllTitle(),
+                                                       'aria-label': $parent.builder.clearAllLabel()
+                                                   }">
+                                    <span data-bind="i18n: 'Clear all'"></span>
+                                </button>
+                                <!-- /ko -->
+                            </div>
+                            <div class="ufe-expr__autocomplete-hint"
+                                 role="status"
+                                 data-bind="text: row.pasteNotice, visible: row.pasteNotice() !== ''"></div>
+                            <!-- ko if: $parent.builder.dropdownListVisible(row, row.searchText(), 'value') -->
+                            <!-- The PANEL, not the list, swallows mousedown to hold the input's focus: the tree's
+                                 header row sits beside the listbox rather than inside it — buttons are not valid
+                                 option content — and a press on those buttons must not blur the input either. -->
+                            <div class="ufe-expr__dropdown"
+                                 data-bind="event: { mousedown: function (data, e) { return $parent.builder.keepInputFocus(e); } }">
+                                <!-- ko if: $parent.builder.rowShowsTree(row) -->
+                                <div class="ufe-expr__tree-actions">
+                                    <!-- Expanding everything is withdrawn above the configured list size, where it would
+                                         render the whole hierarchy in one go; its sibling's tooltip then carries the
+                                         reason, and the per-node carets still reach every branch. -->
+                                    <!-- ko if: $parent.builder.canExpandAllTreeNodes(row) -->
+                                    <button type="button"
+                                            class="ufe-expr__tree-action"
+                                            tabindex="-1"
+                                            data-bind="click: function () { $parent.builder.expandAllTreeNodes(row); }">
+                                        <span data-bind="i18n: 'Expand all'"></span>
+                                    </button>
+                                    <!-- /ko -->
+                                    <button type="button"
+                                            class="ufe-expr__tree-action"
+                                            tabindex="-1"
+                                            data-bind="click: function () { $parent.builder.collapseAllTreeNodes(row); },
+                                                       attr: { title: $parent.builder.collapseAllTreeTitle(row) }">
+                                        <span data-bind="i18n: 'Collapse all'"></span>
+                                    </button>
+                                    <!-- How many values the row stores — the pills spelling them sit
+                                         above the dropdown, outside a scrolled branch's view. -->
+                                    <span class="ufe-expr__tree-selected" data-bind="text: $parent.builder.selectedCountText(row)"></span>
+                                </div>
+                                <!-- /ko -->
+                                <ul class="ufe-expr__autocomplete-list"
+                                    role="listbox"
+                                    data-bind="attr: $parent.builder.listAttrs(row)">
+                                    <!-- Hierarchy-annotated options with no search text: collapsible tree. Every row is a
+                                         checkbox-style toggle: clicking it selects the node, clicking it again deselects. The
+                                         caret at the right edge is the only part that expands instead. Selected nodes stay on
+                                         screen, so their subtrees remain reachable. -->
+                                    <!-- ko if: $parent.builder.rowShowsTree(row) -->
+                                    <!-- ko foreach: { data: $parent.builder.visibleTreeNodes(row), as: 'node' } -->
+                                    <li class="ufe-expr__tree-node"
+                                        role="option"
+                                        data-bind="css: {
+                                                       'ufe-expr__tree-node--selected': node.selected,
+                                                       'ufe-expr__tree-node--parent': node.hasChildren,
+                                                       'ufe-expr__tree-node--active': $parents[1].builder.isActiveOption(row, $index())
+                                                   },
+                                                   style: { paddingLeft: node.indent },
+                                                   attr: $parents[1].builder.treeNodeAttrs(row, $index(), node),
+                                                   click: function () { $parents[1].builder.toggleTreeNode(row, node.value); }">
+                                        <!-- ko if: node.hasChildren -->
+                                        <!-- Expanding has its own target at the row's left edge — where every tree UI keeps
+                                             it — and stops the click there: the row around it toggles selection, so a caret
+                                             that let the event bubble would do both at once. Not a tab stop — the input keeps
+                                             focus while the list is open, and the tree's own arrow keys reach this. -->
+                                        <button type="button"
+                                                class="ufe-expr__tree-toggle"
+                                                tabindex="-1"
+                                                data-bind="css: { 'ufe-expr__tree-toggle--open': node.expanded },
+                                                           click: function (data, e) { $parents[1].builder.toggleNode(row, node.value); e.stopPropagation(); },
+                                                           attr: { 'aria-label': $parents[1].builder.treeToggleLabel(node) }">
+                                            <span class="ufe-expr__icon ufe-expr__icon--chevron" aria-hidden="true"></span>
+                                        </button>
+                                        <!-- /ko -->
+                                        <!-- ko ifnot: node.hasChildren -->
+                                        <!-- A leaf renders the caret's box empty, so labels and badges keep one grid. -->
+                                        <span class="ufe-expr__tree-toggle ufe-expr__tree-toggle--leaf" aria-hidden="true"></span>
+                                        <!-- /ko -->
+                                        <!-- Selection state drawn as a checkbox, deliberately decorative: the row itself IS the
+                                             option and its aria-selected is what announces the state, so a checkbox role here
+                                             would nest one control inside another and say the same thing twice. -->
+                                        <span class="ufe-expr__tree-check"
+                                              aria-hidden="true"
+                                              data-bind="css: {
+                                                             'ufe-expr__tree-check--checked': node.selected,
+                                                             'ufe-expr__tree-check--mixed': node.mixed
+                                                         }"></span>
+                                        <span class="ufe-expr__tree-node-label" data-bind="text: node.label"></span>
+                                        <!-- How much sits below this branch. A leaf renders no badge, so the column reads as
+                                             "there is more inside this one" instead of as a count printed against every name. -->
+                                        <!-- ko if: node.descendants > 0 -->
+                                        <span class="ufe-expr__tree-count"
+                                              data-bind="text: node.descendants,
+                                                         attr: { title: $parents[1].builder.treeCountTitle(node) }"></span>
+                                        <!-- /ko -->
+                                    </li>
+                                    <!-- /ko -->
+                                    <!-- /ko -->
+                                    <!-- Flat filtered list: plain option lists always, hierarchical ones
+                                         while searching — matches then show their breadcrumb path. -->
+                                    <!-- ko ifnot: $parent.builder.rowShowsTree(row) -->
+                                    <!-- ko if: $parent.builder.filteredProductAttributeOptions(row).items.length === 0 -->
+                                    <li class="ufe-expr__autocomplete-empty"
+                                        role="option"
+                                        aria-disabled="true"
+                                        aria-selected="false"
+                                        data-bind="i18n: 'No matches'"></li>
+                                    <!-- /ko -->
+                                    <!-- ko foreach: { data: $parent.builder.filteredProductAttributeOptions(row).items, as: 'opt' } -->
+                                    <li class="ufe-expr__autocomplete-option"
+                                        role="option"
+                                        data-bind="click: function () { $parents[1].builder.addOption(row, opt.value); },
+                                                   text: $parents[1].builder.pathLabelFor(row, opt.value),
+                                                   css: { 'ufe-expr__autocomplete-option--active': $parents[1].builder.isActiveOption(row, $index()) },
+                                                   attr: $parents[1].builder.optionAttrs(row, $index(), opt.value)"></li>
+                                    <!-- /ko -->
+                                    <!-- Non-interactive footer: the match list was truncated, so a value
+                                         that is missing from it may still exist further down the catalogue. -->
+                                    <!-- ko if: $parent.builder.filteredProductAttributeOptions(row).capped -->
+                                    <li class="ufe-expr__autocomplete-hint"
+                                        role="option"
+                                        aria-disabled="true"
+                                        aria-selected="false"
+                                        data-bind="text: $parent.builder.optionCapHint()"></li>
+                                    <!-- /ko -->
+                                    <!-- /ko -->
+                                </ul>
+                                <!-- Footer of the panel — same contract as the options editor's:
+                                     the panel's focus guard covers it, Done is pointer-only. -->
+                                <div class="ufe-expr__dropdown-footer">
+                                    <span class="ufe-expr__dropdown-hint" data-bind="text: $parent.builder.dropdownFooterHint(row)"></span>
+                                    <button type="button"
+                                            class="ufe-expr__dropdown-done"
+                                            tabindex="-1"
+                                            data-bind="click: function () { $parent.builder.closeDropdown(row); }">
+                                        <span data-bind="i18n: 'Done'"></span>
+                                    </button>
+                                </div>
+                            </div>
+                            <!-- /ko -->
+                        </div>
+                        <!-- /ko -->
+
+                        <!-- Generic scalar editor, single value: the row's resolved value type (number,
+                             date, time, email, plain text, …) supplies the native input attributes from
+                             the value-type registry, so a new scalar type is registry data — never a new
+                             branch here. One-way display plus change-event writeback: the value binding
+                             on a method-call expression cannot write back (a deliberate no-op), and the
+                             value observable is rewritten only when the admin actually edits, so untouched
+                             stored rows — a `Y-m-d H:i:s` date displayed date-only, say — keep their
+                             stored value verbatim. -->
+                        <!-- ko if: $parent.builder.rowUsesScalarEditor(row) -->
+                        <!-- The unit beside the editor comes from the selected attribute's
+                             descriptor — a price says its currency, a weight its unit — and is
+                             absent for attributes that name none. -->
+                        <div class="ufe-expr__unit-row">
+                            <input class="ufe-expr__input"
+                                   data-bind="attr: $parent.builder.scalarInputAttrs(row),
+                                              value: $parent.builder.scalarEditValue(row),
+                                              event: { change: function (data, e) { $parent.builder.commitScalarValue(row, e); } }"/>
+                            <!-- ko if: $parent.builder.rowUnit(row) !== '' -->
+                            <span class="ufe-expr__unit" data-bind="text: $parent.builder.rowUnit(row)"></span>
+                            <!-- /ko -->
+                        </div>
+                        <!-- /ko -->
+
+                        <!-- Free-text attribute with AJAX type-ahead, single value (==/!=/contains).
+                             Yields to the scalar editor for typed scalars — only plain-text attributes
+                             with backend suggestions land here. The one dropdown that replaces the
+                             row's value instead of adding to a list. -->
+                        <!-- ko if: !$parent.builder.attributeOptionsPending(row) && !$parent.builder.productAttributeHasOptions(row) && !$parent.builder.rowUsesScalarEditor(row) && $parent.builder.productAttributeSupportsSuggest(row) && !$parent.builder.rowUsesListOperator(row) -->
+                        <div class="ufe-expr__autocomplete">
+                            <input type="text"
+                                   class="ufe-expr__input"
+                                   autocomplete="off"
+                                   role="combobox"
+                                   aria-autocomplete="list"
+                                   data-bind="textInput: row.value,
+                                              attr: $parent.builder.comboboxAttrs(row, row.value(), $parent.builder.valueSuggestWording(), 'value'),
+                                              event: {
+                                                  focus: function () { $parent.builder.openDropdown(row, 'value'); $parent.builder.fetchSuggestionsDebounced(row, row.value()); },
+                                                  input: function () { $parent.builder.fetchSuggestionsDebounced(row, row.value()); return true; },
+                                                  keydown: function (data, e) { return $parent.builder.handleValueKeydown(row, e, row.value()); },
+                                                  blur: function () { $parent.builder.closeDropdown(row); }
+                                              }"/>
+                            <!-- Three states, one list: the request in flight, its empty verdict, or
+                                 its results. The query is the row's own value here, so the "no
+                                 matches" verdict is only reached once that value is long enough to
+                                 have been requested at all. The two state rows sit inside the list as
+                                 unselectable entries: they must be readable, and they are never part
+                                 of what the keyboard walks. -->
+                            <!-- ko if: $parent.builder.dropdownListVisible(row, row.value(), 'value') -->
+                            <ul class="ufe-expr__autocomplete-list"
+                                role="listbox"
+                                data-bind="attr: $parent.builder.listAttrs(row),
+                                           event: { mousedown: function (data, e) { return $parent.builder.keepInputFocus(e); } }">
+                                <!-- ko if: row.suggestLoading() -->
+                                <li class="ufe-expr__autocomplete-loading"
+                                    role="option"
+                                    aria-disabled="true"
+                                    aria-selected="false"
+                                    data-bind="i18n: 'Searching…'"></li>
+                                <!-- /ko -->
+                                <!-- ko if: $parent.builder.suggestNoMatches(row, row.value()) -->
+                                <li class="ufe-expr__autocomplete-empty"
+                                    role="option"
+                                    aria-disabled="true"
+                                    aria-selected="false"
+                                    data-bind="i18n: 'No matches'"></li>
+                                <!-- /ko -->
+                                <!-- ko foreach: { data: row.suggestedOptions(), as: 'opt' } -->
+                                <li class="ufe-expr__autocomplete-option"
+                                    role="option"
+                                    data-bind="click: function () { row.value(opt.value); $parents[1].builder.closeDropdown(row); },
+                                               text: opt.label,
+                                               css: { 'ufe-expr__autocomplete-option--active': $parents[1].builder.isActiveOption(row, $index()) },
+                                               attr: $parents[1].builder.optionAttrs(row, $index(), opt.value)"></li>
+                                <!-- /ko -->
+                            </ul>
+                            <!-- /ko -->
+                        </div>
+                        <!-- /ko -->
+
+                        <!-- Free-text attribute with AJAX type-ahead, multi value (is one of / is not one of). -->
+                        <!-- ko if: !$parent.builder.attributeOptionsPending(row) && !$parent.builder.productAttributeHasOptions(row) && $parent.builder.productAttributeSupportsSuggest(row) && $parent.builder.rowUsesListOperator(row) -->
+                        <div class="ufe-expr__autocomplete">
+                            <!-- Free-text pills: entries are stored as typed, so a pasted list needs
+                                 no option to resolve against — every entry becomes a pill verbatim.
+                                 This is the SKU-list workflow. -->
+                            <div class="ufe-expr__pills">
+                                <!-- ko foreach: { data: $parent.builder.visiblePills(row, $parent.builder.valueAsArray(row)), as: 'pillValue' } -->
+                                <span class="ufe-expr__pill">
+                                    <span data-bind="text: pillValue"></span>
+                                    <button type="button"
+                                            class="ufe-expr__pill-remove"
+                                            data-bind="click: function () { $parents[1].builder.removeOption(row, pillValue); },
+                                                       attr: {
+                                                           title: $parents[1].builder.pillRemoveTitle(),
+                                                           'aria-label': $parents[1].builder.pillRemoveLabel(pillValue)
+                                                       }">
+                                        <span class="ufe-expr__icon ufe-expr__icon--x" aria-hidden="true"></span>
+                                    </button>
+                                </span>
+                                <!-- /ko -->
+                                <!-- ko if: $parent.builder.pillToggleLabel(row, $parent.builder.valueAsArray(row)) !== '' -->
+                                <button type="button"
+                                        class="ufe-expr__pill ufe-expr__pill--more"
+                                        data-bind="text: $parent.builder.pillToggleLabel(row, $parent.builder.valueAsArray(row)),
+                                                   click: function () { $parent.builder.togglePills(row); },
+                                                   attr: {
+                                                       'aria-expanded': $parent.builder.ariaFlag(row.pillsExpanded()),
+                                                       'aria-label': $parent.builder.pillToggleAriaLabel(row, $parent.builder.valueAsArray(row))
+                                                   }"></button>
+                                <!-- /ko -->
+                                <input type="text"
+                                       class="ufe-expr__autocomplete-input"
+                                       autocomplete="off"
+                                       role="combobox"
+                                       aria-autocomplete="list"
+                                       data-bind="textInput: row.searchText,
+                                                  attr: $parent.builder.comboboxAttrs(row, row.searchText(), $parent.builder.listSuggestWording(), 'value'),
+                                                  event: {
+                                                      focus: function () { $parent.builder.openDropdown(row, 'value'); },
+                                                      input: function () { $parent.builder.fetchSuggestionsDebounced(row, row.searchText()); return true; },
+                                                      keydown: function (data, e) { return $parent.builder.handleFreeTextKeydown(row, e); },
+                                                      paste: function (data, e) { return $parent.builder.handlePaste(row, e, 'text'); },
+                                                      blur: function () { $parent.builder.closeDropdown(row); }
+                                                  }"/>
+                                <!-- ko if: $parent.builder.canClearAll(row) -->
+                                <button type="button"
+                                        class="ufe-expr__clear-all"
+                                        data-bind="click: function () { $parent.builder.clearAllValues(row); },
+                                                   attr: {
+                                                       title: $parent.builder.clearAllTitle(),
+                                                       'aria-label': $parent.builder.clearAllLabel()
+                                                   }">
+                                    <span data-bind="i18n: 'Clear all'"></span>
+                                </button>
+                                <!-- /ko -->
+                            </div>
+                            <!-- Standing invitation, not a transient report: entries here are
+                                 committed by Enter and arrive in bulk by paste, neither of which an
+                                 empty box can suggest on its own. -->
+                            <span class="ufe-expr__editor-hint" data-bind="i18n: 'Press Enter to add · paste a list to add many at once'"></span>
+                            <div class="ufe-expr__autocomplete-hint"
+                                 role="status"
+                                 data-bind="text: row.pasteNotice, visible: row.pasteNotice() !== ''"></div>
+                            <!-- Same three states as the single-value type-ahead, queried by the
+                                 search text instead of the row value. -->
+                            <!-- ko if: $parent.builder.dropdownListVisible(row, row.searchText(), 'value') -->
+                            <ul class="ufe-expr__autocomplete-list"
+                                role="listbox"
+                                data-bind="attr: $parent.builder.listAttrs(row),
+                                           event: { mousedown: function (data, e) { return $parent.builder.keepInputFocus(e); } }">
+                                <!-- ko if: row.suggestLoading() -->
+                                <li class="ufe-expr__autocomplete-loading"
+                                    role="option"
+                                    aria-disabled="true"
+                                    aria-selected="false"
+                                    data-bind="i18n: 'Searching…'"></li>
+                                <!-- /ko -->
+                                <!-- ko if: $parent.builder.suggestNoMatches(row, row.searchText()) -->
+                                <li class="ufe-expr__autocomplete-empty"
+                                    role="option"
+                                    aria-disabled="true"
+                                    aria-selected="false"
+                                    data-bind="i18n: 'No matches'"></li>
+                                <!-- /ko -->
+                                <!-- ko foreach: { data: row.suggestedOptions(), as: 'opt' } -->
+                                <li class="ufe-expr__autocomplete-option"
+                                    role="option"
+                                    data-bind="click: function () { $parents[1].builder.addOption(row, opt.value); },
+                                               text: opt.label,
+                                               css: { 'ufe-expr__autocomplete-option--active': $parents[1].builder.isActiveOption(row, $index()) },
+                                               attr: $parents[1].builder.optionAttrs(row, $index(), opt.value)"></li>
+                                <!-- /ko -->
+                            </ul>
+                            <!-- /ko -->
+                        </div>
+                        <!-- /ko -->
+
+                        <!-- Raw text fallback: multi-valued operators on attributes with neither options
+                             nor suggestions (the value edits as a bare CSV string). Single-valued rows
+                             never land here — they always resolve a scalar type and render the generic
+                             editor above. -->
+                        <!-- ko if: !$parent.builder.attributeOptionsPending(row) && !$parent.builder.productAttributeHasOptions(row) && !$parent.builder.productAttributeSupportsSuggest(row) && !$parent.builder.rowUsesScalarEditor(row) -->
+                        <input type="text"
+                               class="ufe-expr__input"
+                               data-bind="textInput: row.value,
+                                          attr: {
+                                              placeholder: $parent.builder.valuePlaceholder(),
+                                              'aria-label': $parent.builder.valueEditorLabel()
+                                          }"/>
+                        <!-- /ko -->
+                    <!-- /ko -->
+
+                    <!-- Advisory value validation, driven by the selected operator's `validate` key
+                         or, absent one, by the row's scalar value type's default validator. Renders
+                         under whichever editor is active; the value still serialises while invalid —
+                         the admin may be mid-typing. Muted rather than alarmed, for the same reason:
+                         it informs, it does not gate. The icon is decorative. -->
+                    <span class="ufe-expr__value-error"
+                          data-bind="visible: $parent.builder.rowValueError(row) !== ''">
+                        <span class="ufe-expr__icon ufe-expr__icon--info" aria-hidden="true"></span>
+                        <span data-bind="text: $parent.builder.rowValueError(row)"></span>
+                    </span>
+                </div>
+            </div>
+            <div class="ufe-expr__row-actions">
+                <button type="button"
+                        class="ufe-expr__duplicate"
+                        data-bind="click: function () { $parent.builder.duplicateRow(row); },
+                                   attr: {
+                                       title: $parent.builder.duplicateRowLabel(),
+                                       'aria-label': $parent.builder.duplicateRowLabel()
+                                   }">
+                    <span class="ufe-expr__icon ufe-expr__icon--copy" aria-hidden="true"></span>
+                </button>
+                <!-- Carries the row's remove id: removing the row below this one lands focus here. -->
+                <button type="button"
+                        class="ufe-expr__remove"
+                        data-bind="click: function () { $parent.builder.removeRow(row); },
+                                   attr: {
+                                       id: $parent.builder.rowRemoveDomId(row),
+                                       title: $parent.builder.removeRowLabel(),
+                                       'aria-label': $parent.builder.removeRowLabel()
+                                   }">
+                    <span class="ufe-expr__icon ufe-expr__icon--x" aria-hidden="true"></span>
+                </button>
+            </div>
+        </div>
+        <!-- /ko -->
+
+        <!-- ko if: row.kind === 'group' -->
+        <div class="ufe-expr__group-child"
+             data-bind="template: { name: 'Hryvinskyi_UiFormElements/form/element/expression-group', data: { group: row, builder: $parent.builder, depth: $parent.depth + 1 } }"></div>
+        <!-- /ko -->
+        </div>
+        <!-- ko if: builder.groupIsEmpty(group) -->
+        <div class="ufe-expr__group-empty" data-bind="i18n: 'This group is empty — it is skipped when the rule runs.'"></div>
+        <!-- /ko -->
+        </div>
+    </div>
+
+    <div class="ufe-expr__group-footer">
+        <!-- Drop indicator for the last gap of this group — the one gap no child sits below, so the
+             group answers for it instead. For an empty group it is also the only gap there is. -->
+        <div class="ufe-expr__drop-indicator" data-bind="visible: builder.isDropSlotAtEnd(group)"></div>
+        <!-- Carries the group's add id: it is present in every group, so it is the focus target of
+             last resort once a group's children run out. -->
+        <button type="button"
+                class="ufe-expr__add ufe-expr__add--inline"
+                data-bind="click: function () { builder.addRowToGroup(group); },
+                           attr: { id: builder.groupAddDomId(group) }">
+            <span data-bind="i18n: '+ Add condition'"></span>
+        </button>
+        <!-- Nesting stops where the component's configured depth cap does: the action is asked for
+             rather than compared against a number here, so the authoring cap and the one the drag
+             and the arrow keys enforce are literally the same value. -->
+        <!-- ko if: builder.canAddGroupAt(depth) -->
+        <button type="button" class="ufe-expr__add ufe-expr__add--inline" data-bind="click: function () { builder.addGroupToGroup(group); }">
+            <span data-bind="i18n: '+ Add group'"></span>
+        </button>
+        <!-- /ko -->
+    </div>
+</div>

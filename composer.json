@@ -1,0 +1,30 @@
+{
+    "name": "hryvinskyi/magento2-ui-form-elements",
+    "description": "Reusable ui_component admin form elements for Magento 2 & Adobe Commerce",
+    "type": "magento2-module",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Volodymyr Hryvinskyi",
+            "email": "volodymyr@hryvinskyi.com"
+        }
+    ],
+    "require": {
+        "php": "~8.1.0||~8.2.0||~8.3.0||~8.4.0||~8.5.0",
+        "magento/framework": "*",
+        "magento/module-backend": "*",
+        "magento/module-ui": "*",
+        "magento/module-rule": "*",
+        "magento/module-catalog": "*",
+        "magento/module-eav": "*",
+        "magento/module-store": "*"
+    },
+    "autoload": {
+        "files": [
+            "registration.php"
+        ],
+        "psr-4": {
+            "Hryvinskyi\\UiFormElements\\": ""
+        }
+    }
+}

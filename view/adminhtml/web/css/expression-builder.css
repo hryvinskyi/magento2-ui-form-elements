@@ -1,0 +1,1518 @@
+/*
+ * Copyright (c) 2026. Volodymyr Hryvinskyi. All rights reserved.
+ * Author: Volodymyr Hryvinskyi <volodymyr@hryvinskyi.com>
+ * GitHub: https://github.com/hryvinskyi
+ */
+
+/* The builder's design system is the Magento admin's own palette: #4a3f39 ink, #666 muted,
+   #adadad control borders, #e3e3e3 hairlines, #f5f5f5 panels, 3px radii — with one accent
+   (Magento orange) driving selection, focus and the joiner rail. The accent's derived tints
+   are spelled as their own tokens rather than computed, so a consumer re-theming the accent
+   overrides five custom properties on one selector and every wash, ring and rail follows. */
+.ufe-expression-builder {
+    --ufe-accent: #eb5202;
+    /* Focus ring (20%), rail line + keyboard highlight (14%), selected-row wash (7%),
+       nested-group wash (4.5%) — one alpha ladder over the same accent. */
+    --ufe-accent-ring: rgba(235, 82, 2, 0.2);
+    --ufe-accent-rail: rgba(235, 82, 2, 0.14);
+    --ufe-accent-soft: rgba(235, 82, 2, 0.07);
+    --ufe-accent-wash: rgba(235, 82, 2, 0.045);
+    --ufe-accent-outline: rgba(235, 82, 2, 0.35);
+    --ufe-text: #4a3f39;
+    --ufe-text-muted: #666666;
+    --ufe-text-faint: #adadad;
+    --ufe-border: #e3e3e3;
+    --ufe-border-input: #adadad;
+    --ufe-bg: #f5f5f5;
+    --ufe-danger: #eb5202;
+    --ufe-success: #79a22e;
+    --ufe-warning-bg: #fff1ad;
+    --ufe-radius: 3px;
+    --ufe-shadow: 0 6px 18px rgba(74, 63, 57, 0.18);
+    /* Row rhythm — the `density` tunable's whole surface. */
+    --ufe-row-pad: 9px;
+
+    /* The Lucide glyphs this widget draws, inlined verbatim (24×24 grid, 2px round-capped
+       stroke) and used as MASKS, never as background images: a mask takes its colour from the
+       element, so one copy of each icon serves every state and theme token instead of one
+       recoloured copy per state. Data URIs, because a strict admin page must not fetch an icon
+       over the network, and the stroke is white so the mask reads as fully opaque whether the
+       browser resolves it by alpha or by luminance. */
+    --ufe-icon-square: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2'/%3E%3C/svg%3E");
+    --ufe-icon-square-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2'/%3E%3Cpath d='m9 12 2 2 4-4'/%3E%3C/svg%3E");
+    --ufe-icon-square-minus: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='18' x='3' y='3' rx='2'/%3E%3Cpath d='M9 12h6'/%3E%3C/svg%3E");
+    --ufe-icon-grip: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='9' cy='5' r='1'/%3E%3Ccircle cx='9' cy='12' r='1'/%3E%3Ccircle cx='9' cy='19' r='1'/%3E%3Ccircle cx='15' cy='5' r='1'/%3E%3Ccircle cx='15' cy='12' r='1'/%3E%3Ccircle cx='15' cy='19' r='1'/%3E%3C/svg%3E");
+    --ufe-icon-copy: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2' ry='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E");
+    --ufe-icon-x: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 6 6 18'/%3E%3Cpath d='m6 6 12 12'/%3E%3C/svg%3E");
+    --ufe-icon-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E");
+    --ufe-icon-alert: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E");
+    --ufe-icon-info: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4'/%3E%3Cpath d='M12 8h.01'/%3E%3C/svg%3E");
+    background: #ffffff;
+    border: 1px solid var(--ufe-border);
+    border-radius: var(--ufe-radius);
+    padding: 18px 20px;
+    color: var(--ufe-text);
+    font-size: 13px;
+}
+
+/* The `density` tunable's compact rhythm. Everything else follows from the one custom property. */
+.ufe-expression-builder.ufe-expression-builder--compact {
+    --ufe-row-pad: 5px;
+}
+
+/* One shared glyph element: the icon IS the element, drawn by mask so it inherits the colour of
+   whatever button or line it sits in — including that parent's hover and focus transitions. */
+.ufe-expression-builder .ufe-expr__icon {
+    display: inline-block;
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    background-color: currentColor;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+}
+
+.ufe-expression-builder .ufe-expr__icon--grip {
+    -webkit-mask-image: var(--ufe-icon-grip);
+    mask-image: var(--ufe-icon-grip);
+}
+
+.ufe-expression-builder .ufe-expr__icon--copy {
+    width: 14px;
+    height: 14px;
+    -webkit-mask-image: var(--ufe-icon-copy);
+    mask-image: var(--ufe-icon-copy);
+}
+
+.ufe-expression-builder .ufe-expr__icon--x {
+    -webkit-mask-image: var(--ufe-icon-x);
+    mask-image: var(--ufe-icon-x);
+}
+
+.ufe-expression-builder .ufe-expr__icon--chevron {
+    width: 14px;
+    height: 14px;
+    -webkit-mask-image: var(--ufe-icon-chevron);
+    mask-image: var(--ufe-icon-chevron);
+}
+
+.ufe-expression-builder .ufe-expr__icon--alert {
+    -webkit-mask-image: var(--ufe-icon-alert);
+    mask-image: var(--ufe-icon-alert);
+}
+
+.ufe-expression-builder .ufe-expr__icon--info {
+    width: 13px;
+    height: 13px;
+    -webkit-mask-image: var(--ufe-icon-info);
+    mask-image: var(--ufe-icon-info);
+}
+
+/* ---------------- heading row ---------------- */
+
+.ufe-expression-builder .ufe-expr__topbar {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+/* The field's own heading, rendered only when the form XML gives the field a label. The same
+   small-caps treatment as the preview's title: both name a section of this one widget, and a
+   heading styled like a form label would compete with the standard field labels around it. */
+.ufe-expression-builder .ufe-expr__heading {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--ufe-text-muted);
+    letter-spacing: 0.1em;
+}
+
+/* The rule-summary chip: metadata about the whole rule, parked at the right edge whatever the
+   heading's width — or alone on the row when the field has no label. */
+.ufe-expression-builder .ufe-expr__rule-summary {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--ufe-border);
+    border-radius: 999px;
+    background: var(--ufe-bg);
+    padding: 3px 11px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ufe-text-muted);
+    white-space: nowrap;
+}
+
+/* ---------------- groups ---------------- */
+
+.ufe-expression-builder .ufe-expr__group {
+    position: relative;
+    border: 1px solid var(--ufe-border);
+    border-radius: var(--ufe-radius);
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+}
+
+/* A nested group reads as a card inside the card: washed with the accent so depth shows at a
+   glance, without a second border colour competing with the selection tints. */
+.ufe-expression-builder .ufe-expr__group .ufe-expr__group {
+    background: var(--ufe-accent-wash);
+}
+
+.ufe-expression-builder .ufe-expr__group-child {
+    margin: 5px 4px 8px;
+}
+
+.ufe-expression-builder .ufe-expr__group-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 11px 13px;
+    background: var(--ufe-bg);
+    border-bottom: 1px solid var(--ufe-border);
+    border-radius: var(--ufe-radius) var(--ufe-radius) 0 0;
+}
+
+/* A nested group's header sits on the group's own wash rather than on a second grey band. */
+.ufe-expression-builder .ufe-expr__group .ufe-expr__group .ufe-expr__group-header {
+    background: transparent;
+    padding: 9px 11px;
+    gap: 12px;
+}
+
+.ufe-expression-builder .ufe-expr__group-heading {
+    font-size: 12.5px;
+    color: var(--ufe-text-muted);
+}
+
+/* The group's contents at a glance, right-aligned — it also parks the header actions beside it. */
+.ufe-expression-builder .ufe-expr__group-summary {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--ufe-text-muted);
+    white-space: nowrap;
+}
+
+.ufe-expression-builder .ufe-expr__group-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.ufe-expression-builder .ufe-expr__group-duplicate,
+.ufe-expression-builder .ufe-expr__group-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    background: transparent;
+    color: var(--ufe-text-faint);
+    width: 26px;
+    height: 26px;
+    border-radius: var(--ufe-radius);
+    cursor: pointer;
+    padding: 0;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+/* Duplicating is constructive — its hover tints toward the accent, unlike the destructive one. */
+.ufe-expression-builder .ufe-expr__group-duplicate:hover,
+.ufe-expression-builder .ufe-expr__group-duplicate:focus,
+.ufe-expression-builder .ufe-expr__group-duplicate:active {
+    background: var(--ufe-border);
+    color: var(--ufe-accent);
+    outline: 0;
+    text-decoration: none;
+}
+
+.ufe-expression-builder .ufe-expr__group-remove:hover,
+.ufe-expression-builder .ufe-expr__group-remove:focus,
+.ufe-expression-builder .ufe-expr__group-remove:active {
+    background: var(--ufe-border);
+    color: var(--ufe-danger);
+    outline: 0;
+    text-decoration: none;
+}
+
+/* ---------------- ALL/ANY segmented toggle ---------------- */
+
+.ufe-expression-builder .ufe-expr__aggregator-pair {
+    display: inline-flex;
+    padding: 2px;
+    gap: 2px;
+    background: var(--ufe-border);
+    border-radius: var(--ufe-radius);
+}
+
+.ufe-expression-builder .ufe-expr__aggregator-btn {
+    border: 0;
+    border-radius: 2px;
+    padding: 5px 13px;
+    background: transparent;
+    color: var(--ufe-text-muted);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+.ufe-expression-builder .ufe-expr__aggregator-btn:hover,
+.ufe-expression-builder .ufe-expr__aggregator-btn:focus,
+.ufe-expression-builder .ufe-expr__aggregator-btn:active {
+    background: transparent;
+    color: var(--ufe-text);
+    outline: 0;
+    text-decoration: none;
+}
+
+.ufe-expression-builder .ufe-expr__aggregator-btn--active,
+.ufe-expression-builder .ufe-expr__aggregator-btn--active:hover,
+.ufe-expression-builder .ufe-expr__aggregator-btn--active:focus,
+.ufe-expression-builder .ufe-expr__aggregator-btn--active:active {
+    background: var(--ufe-accent);
+    color: #ffffff;
+}
+
+/* ---------------- group body: rail + children column ---------------- */
+
+.ufe-expression-builder .ufe-expr__group-body {
+    display: flex;
+    align-items: stretch;
+    padding: 10px 13px 2px;
+}
+
+.ufe-expression-builder .ufe-expr__group .ufe-expr__group .ufe-expr__group-body {
+    padding: 8px 11px 0;
+}
+
+/* The joiner rail exists in the markup always and is a treatment of the rail joiner style only —
+   the modifier class the component sets from its tunable. */
+.ufe-expression-builder .ufe-expr__rail {
+    display: none;
+}
+
+.ufe-expression-builder.ufe-expression-builder--joiner-rail .ufe-expr__rail {
+    display: block;
+    flex: 0 0 30px;
+    position: relative;
+    margin-right: 2px;
+}
+
+.ufe-expression-builder .ufe-expr__rail::before {
+    content: '';
+    position: absolute;
+    left: 14px;
+    top: 22px;
+    bottom: 6px;
+    width: 2px;
+    background: var(--ufe-accent-rail);
+}
+
+/* The aggregator word, rotated onto the rail: white-backed so the line reads as passing behind
+   it, accent-coloured because the rail is the selection system's own voice. */
+.ufe-expression-builder .ufe-expr__rail-word {
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translate(-50%, -50%) rotate(180deg);
+    writing-mode: vertical-rl;
+    background: #ffffff;
+    border: 1px solid var(--ufe-border);
+    border-radius: 999px;
+    padding: 9px 3px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    color: var(--ufe-accent);
+}
+
+/* A nested group's rail is a step narrower, like everything else inside it. */
+.ufe-expression-builder.ufe-expression-builder--joiner-rail .ufe-expr__group .ufe-expr__group .ufe-expr__rail {
+    flex-basis: 26px;
+    margin-right: 0;
+}
+
+.ufe-expression-builder .ufe-expr__group .ufe-expr__group .ufe-expr__rail::before {
+    left: 12px;
+    top: 20px;
+    bottom: 4px;
+}
+
+.ufe-expression-builder .ufe-expr__group .ufe-expr__group .ufe-expr__rail-word {
+    left: 12px;
+    padding: 8px 3px;
+    font-size: 9px;
+}
+
+.ufe-expression-builder .ufe-expr__group-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Column captions of the row grid — the same flex-plus-grid skeleton as a row (drag gutter,
+   three columns, actions gutter), so the captions land over the controls they caption. */
+.ufe-expression-builder .ufe-expr__colhead {
+    display: flex;
+    gap: 10px;
+    padding: 0 6px 4px;
+}
+
+.ufe-expression-builder .ufe-expr__colhead-gutter {
+    flex: 0 0 22px;
+}
+
+.ufe-expression-builder .ufe-expr__colhead-gutter--actions {
+    flex: 0 0 56px;
+}
+
+.ufe-expression-builder .ufe-expr__colhead-grid {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(168px, 1.15fr) minmax(150px, 0.8fr) minmax(252px, 1.8fr);
+    gap: 10px;
+}
+
+.ufe-expression-builder .ufe-expr__colhead-cell {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ufe-text-muted);
+}
+
+.ufe-expression-builder .ufe-expr__group-children {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Inline hint of a group with nothing in it — the serialiser will skip it, so the box says so
+   instead of reading as a rendering failure. */
+.ufe-expression-builder .ufe-expr__group-empty {
+    padding: 10px 6px 4px;
+    font-size: 12px;
+    font-style: italic;
+    color: var(--ufe-text-muted);
+}
+
+/* ---------------- joiners between children ---------------- */
+
+/* Default treatment (rail and none styles): a hairline between siblings; the words stay in the
+   markup for the chip treatment below and are hidden here. */
+.ufe-expression-builder .ufe-expr__connector {
+    height: 1px;
+    background: var(--ufe-border);
+    margin: 1px 6px;
+}
+
+.ufe-expression-builder .ufe-expr__connector-word {
+    display: none;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: lowercase;
+    color: var(--ufe-text-muted);
+    background: var(--ufe-bg);
+    border: 1px solid var(--ufe-border);
+    border-radius: 999px;
+    padding: 2px 10px;
+    line-height: 1.4;
+}
+
+/* Chip treatment: the aggregator word between every two children, a line running on from it. */
+.ufe-expression-builder.ufe-expression-builder--joiner-chip .ufe-expr__connector {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: auto;
+    background: transparent;
+    margin: 0;
+    padding: 5px 6px;
+}
+
+.ufe-expression-builder.ufe-expression-builder--joiner-chip .ufe-expr__connector::after {
+    content: '';
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--ufe-border);
+}
+
+/* The connector shows the owning group's aggregator word: the modifier class on the group element
+   picks which of the two rendered words is visible; the child combinators stop the choice from
+   leaking into nested groups, whose connectors sit under their own group element. */
+.ufe-expression-builder.ufe-expression-builder--joiner-chip .ufe-expr__group:not(.ufe-expr__group--any) > .ufe-expr__group-body > .ufe-expr__group-main > .ufe-expr__group-children > .ufe-expr__connector > .ufe-expr__connector-word--all {
+    display: inline-block;
+}
+
+.ufe-expression-builder.ufe-expression-builder--joiner-chip .ufe-expr__group--any > .ufe-expr__group-body > .ufe-expr__group-main > .ufe-expr__group-children > .ufe-expr__connector > .ufe-expr__connector-word--any {
+    display: inline-block;
+}
+
+/* The joiner-none treatment is the default hairline with the rail withheld — named here so the
+   modifier the component emits resolves to a real class. */
+.ufe-expression-builder.ufe-expression-builder--joiner-none .ufe-expr__rail {
+    display: none;
+}
+
+/* ---------------- condition rows ---------------- */
+
+/* A row is one flex line: drag gutter, the three-column grid, the actions gutter. The paddings
+   and the 22/56px gutters mirror the column-caption skeleton above. */
+.ufe-expression-builder .ufe-expr__row {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: var(--ufe-row-pad) 6px;
+    border-radius: var(--ufe-radius);
+}
+
+.ufe-expression-builder .ufe-expr__row:hover {
+    background: var(--ufe-bg);
+}
+
+.ufe-expression-builder .ufe-expr__triplet {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(168px, 1.15fr) minmax(150px, 0.8fr) minmax(252px, 1.8fr);
+    gap: 10px;
+    align-items: start;
+}
+
+.ufe-expression-builder .ufe-expr__col {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 6px;
+}
+
+.ufe-expression-builder .ufe-expr__col--field,
+.ufe-expression-builder .ufe-expr__col--operator,
+.ufe-expression-builder .ufe-expr__col--value {
+    min-width: 0;
+}
+
+/* Row actions: a fixed gutter so every row's controls end on the same line. */
+.ufe-expression-builder .ufe-expr__row-actions {
+    flex: 0 0 56px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 2px;
+    height: 34px;
+}
+
+.ufe-expression-builder .ufe-expr__duplicate,
+.ufe-expression-builder .ufe-expr__remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    background: transparent;
+    color: var(--ufe-text-faint);
+    width: 26px;
+    height: 26px;
+    border-radius: var(--ufe-radius);
+    cursor: pointer;
+    padding: 0;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+.ufe-expression-builder .ufe-expr__duplicate:hover,
+.ufe-expression-builder .ufe-expr__duplicate:focus,
+.ufe-expression-builder .ufe-expr__duplicate:active {
+    background: var(--ufe-border);
+    color: var(--ufe-accent);
+    outline: 0;
+    text-decoration: none;
+}
+
+.ufe-expression-builder .ufe-expr__remove:hover,
+.ufe-expression-builder .ufe-expr__remove:focus,
+.ufe-expression-builder .ufe-expr__remove:active {
+    background: var(--ufe-border);
+    color: var(--ufe-danger);
+    outline: 0;
+    text-decoration: none;
+}
+
+/* ---------------- controls ---------------- */
+
+.ufe-expression-builder .ufe-expr__select,
+.ufe-expression-builder .ufe-expr__input {
+    appearance: none;
+    -webkit-appearance: none;
+    background: #ffffff;
+    border: 1px solid var(--ufe-border-input);
+    border-radius: var(--ufe-radius);
+    color: var(--ufe-text);
+    font-size: 13px;
+    padding: 0 30px 0 10px;
+    height: 34px;
+    line-height: 1.2;
+    width: 100%;
+    box-shadow: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23666666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-position: right 9px center;
+    background-size: 16px 16px;
+    background-repeat: no-repeat;
+}
+
+.ufe-expression-builder .ufe-expr__input {
+    background-image: none;
+    padding-right: 10px;
+}
+
+.ufe-expression-builder .ufe-expr__select:focus,
+.ufe-expression-builder .ufe-expr__input:focus {
+    border-color: var(--ufe-accent);
+    outline: 0;
+    box-shadow: 0 0 0 3px var(--ufe-accent-ring);
+}
+
+/* Typed scalar editors (number, date, time, email, …) inherit the base input metrics from
+   .ufe-expr__input; the single modifier — emitted by the component for every non-text scalar
+   type, so registered types need no stylesheet edits — caps the width so a short value does not
+   stretch across the whole value column. Plain-text scalars keep the full-width base class. */
+.ufe-expression-builder .ufe-expr__input--typed {
+    max-width: 172px;
+}
+
+/* Numbers read right-aligned and narrow; keyed on the native input type the value-type registry
+   emits, never on a per-type class. */
+.ufe-expression-builder .ufe-expr__input--typed[type='number'] {
+    max-width: 132px;
+    text-align: right;
+}
+
+/* A value entered in a unit: the editor and the unit's code on one line. The code is muted and
+   monospaced like every other identifier here — it says what the number counts, it is not a
+   second value. */
+.ufe-expression-builder .ufe-expr__unit-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ufe-expression-builder .ufe-expr__unit {
+    flex: 0 0 auto;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 11px;
+    color: var(--ufe-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+/* ---------------- multi-value editors ---------------- */
+
+.ufe-expression-builder .ufe-expr__autocomplete {
+    position: relative;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.ufe-expression-builder .ufe-expr__pills {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid var(--ufe-border-input);
+    border-radius: var(--ufe-radius);
+    background: #ffffff;
+    padding: 4px 7px;
+    min-height: 34px;
+    cursor: text;
+}
+
+.ufe-expression-builder .ufe-expr__pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    max-width: 100%;
+    background: var(--ufe-bg);
+    border: 1px solid var(--ufe-border);
+    border-radius: var(--ufe-radius);
+    padding: 1px 3px 1px 8px;
+    font-size: 12px;
+    color: var(--ufe-text);
+    line-height: 20px;
+}
+
+.ufe-expression-builder .ufe-expr__pill-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    background: transparent;
+    color: var(--ufe-text-muted);
+    cursor: pointer;
+    width: 18px;
+    height: 18px;
+    border-radius: var(--ufe-radius);
+    padding: 0;
+}
+
+.ufe-expression-builder .ufe-expr__pill-remove .ufe-expr__icon {
+    width: 11px;
+    height: 11px;
+}
+
+.ufe-expression-builder .ufe-expr__pill-remove:hover,
+.ufe-expression-builder .ufe-expr__pill-remove:focus,
+.ufe-expression-builder .ufe-expr__pill-remove:active {
+    background: var(--ufe-border);
+    color: var(--ufe-text);
+    outline: 0;
+    text-decoration: none;
+}
+
+/* Overflow toggle of a long pill list: a pill in shape, a button in behaviour — the dashed
+   outline and the pointer say it acts instead of naming a selected value. */
+.ufe-expression-builder .ufe-expr__pill--more {
+    background: transparent;
+    border: 1px dashed var(--ufe-border-input);
+    border-radius: var(--ufe-radius);
+    color: var(--ufe-text-muted);
+    cursor: pointer;
+    padding: 1px 8px;
+    font-size: 11.5px;
+    font-weight: 600;
+    line-height: 20px;
+}
+
+.ufe-expression-builder .ufe-expr__pill--more:hover,
+.ufe-expression-builder .ufe-expr__pill--more:focus,
+.ufe-expression-builder .ufe-expr__pill--more:active {
+    background: transparent;
+    border-color: var(--ufe-accent);
+    color: var(--ufe-accent);
+    outline: 0;
+    text-decoration: none;
+}
+
+/* Clear-all sits at the end of the pill row: link-styled so it never competes with the pills'
+   own remove buttons, and only rendered once a row holds enough values to be worth emptying. */
+.ufe-expression-builder .ufe-expr__clear-all {
+    border: 0;
+    background: transparent;
+    color: var(--ufe-text-muted);
+    cursor: pointer;
+    padding: 0 2px;
+    font-size: 11px;
+    line-height: 1.4;
+    text-decoration: underline;
+    white-space: nowrap;
+}
+
+.ufe-expression-builder .ufe-expr__clear-all:hover,
+.ufe-expression-builder .ufe-expr__clear-all:focus,
+.ufe-expression-builder .ufe-expr__clear-all:active {
+    background: transparent;
+    color: var(--ufe-accent);
+    outline: 0;
+    text-decoration: underline;
+}
+
+.ufe-expression-builder .ufe-expr__autocomplete-input {
+    flex: 1 1 90px;
+    min-width: 80px;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    font-size: 13px;
+    color: var(--ufe-text);
+    padding: 0;
+    height: 22px;
+    line-height: 1.4;
+    box-shadow: none;
+}
+
+.ufe-expression-builder .ufe-expr__autocomplete-input:focus {
+    border: 0;
+    outline: 0;
+    box-shadow: none;
+}
+
+/* Placeholder holding an option editor's place while the attribute's list is fetched: shaped
+   like the control it will become, muted like every other state row. */
+.ufe-expression-builder .ufe-expr__value-loading {
+    display: flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px dashed var(--ufe-border-input);
+    border-radius: var(--ufe-radius);
+    background: var(--ufe-bg);
+    color: var(--ufe-text-muted);
+    font-size: 12.5px;
+    font-style: italic;
+}
+
+/* Standing hint under the free-text list editor — how values get in. */
+.ufe-expression-builder .ufe-expr__editor-hint {
+    font-size: 11px;
+    color: var(--ufe-text-muted);
+    padding-left: 2px;
+    line-height: 1.4;
+}
+
+/* ---------------- dropdowns ---------------- */
+
+/* The floating card of a dropdown. Two elements can be it: a bare list (the type-ahead dropdowns,
+   which have nothing but options to show) and the panel that wraps a list needing a header or a
+   footer of its own — rows of buttons cannot live inside a listbox. Sized by the anchor but never
+   below a readable width: a value column squeezed by the grid still opens a usable list. */
+.ufe-expression-builder .ufe-expr__dropdown,
+.ufe-expression-builder .ufe-expr__autocomplete-list {
+    position: absolute;
+    z-index: 100;
+    top: 100%;
+    left: 0;
+    width: 100%;
+    min-width: 320px;
+    max-width: 420px;
+    margin: 5px 0 0;
+    background: #ffffff;
+    border: 1px solid var(--ufe-border-input);
+    border-radius: var(--ufe-radius);
+    box-shadow: var(--ufe-shadow);
+}
+
+.ufe-expression-builder .ufe-expr__autocomplete-list {
+    list-style: none;
+    padding: 4px 0;
+    max-height: 272px;
+    overflow-y: auto;
+}
+
+/* The panel clips its own corners, so the scrolling list inside it cannot square them off. */
+.ufe-expression-builder .ufe-expr__dropdown {
+    overflow: hidden;
+}
+
+/* Inside a panel the list is only the scrolling region: the card's chrome belongs to the panel, or
+   the two would draw two borders and two shadows around one dropdown. */
+.ufe-expression-builder .ufe-expr__dropdown .ufe-expr__autocomplete-list {
+    position: static;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    max-height: 252px;
+}
+
+/* Header of the option tree: the two whole-tree actions and the selection count, above the
+   scrolling list rather than inside it. */
+.ufe-expression-builder .ufe-expr__tree-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 12px;
+    background: var(--ufe-bg);
+    border-bottom: 1px solid var(--ufe-border);
+}
+
+/* Link-styled, like clear-all: these act on the whole list and must not read as one more option. */
+.ufe-expression-builder .ufe-expr__tree-action {
+    border: 0;
+    background: transparent;
+    color: var(--ufe-text-muted);
+    cursor: pointer;
+    padding: 0;
+    font-size: 11px;
+    line-height: 1.4;
+    text-decoration: underline;
+    white-space: nowrap;
+}
+
+.ufe-expression-builder .ufe-expr__tree-action:hover,
+.ufe-expression-builder .ufe-expr__tree-action:focus,
+.ufe-expression-builder .ufe-expr__tree-action:active {
+    background: transparent;
+    color: var(--ufe-accent);
+    outline: 0;
+    text-decoration: underline;
+}
+
+.ufe-expression-builder .ufe-expr__tree-selected {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--ufe-text-muted);
+    white-space: nowrap;
+}
+
+/* Footer of an options panel: the advisory line and the explicit way out. */
+.ufe-expression-builder .ufe-expr__dropdown-footer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 12px;
+    border-top: 1px solid var(--ufe-border);
+    background: var(--ufe-bg);
+}
+
+.ufe-expression-builder .ufe-expr__dropdown-hint {
+    flex: 1 1 auto;
+    font-size: 11px;
+    color: var(--ufe-text-muted);
+    line-height: 1.4;
+}
+
+.ufe-expression-builder .ufe-expr__dropdown-done {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ufe-accent);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.ufe-expression-builder .ufe-expr__dropdown-done:hover,
+.ufe-expression-builder .ufe-expr__dropdown-done:focus,
+.ufe-expression-builder .ufe-expr__dropdown-done:active {
+    background: transparent;
+    color: var(--ufe-accent);
+    outline: 0;
+    text-decoration: underline;
+}
+
+/* ---------------- searchable single-select ---------------- */
+
+/* The closed control, and the box the open dropdown hangs from. Metrics and the chevron are the
+   plain select's, deliberately: it replaces one, so it has to read as one rather than as a text field
+   that happens to have a list. A flex row of two items — the input carrying the chosen label, and the
+   code beside it — so the whole control stays one 34px line whatever it holds. */
+.ufe-expression-builder .ufe-expr__combo {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    height: 34px;
+    border: 1px solid var(--ufe-border-input);
+    border-radius: var(--ufe-radius);
+    background: #ffffff;
+    padding: 0 28px 0 10px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23666666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-position: right 9px center;
+    background-size: 16px 16px;
+    background-repeat: no-repeat;
+    cursor: text;
+}
+
+/* Borderless like the pill editors' search input: the BOX is what lights up on focus (see the
+   focus-within rule at the end of this file), so an inner ring would draw a second one. */
+.ufe-expression-builder .ufe-expr__combo-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    font-size: 13px;
+    color: var(--ufe-text);
+    padding: 0;
+    height: 100%;
+    line-height: 1.2;
+    box-shadow: none;
+    text-overflow: ellipsis;
+}
+
+.ufe-expression-builder .ufe-expr__combo-input:focus {
+    border: 0;
+    outline: 0;
+    box-shadow: none;
+}
+
+/* The chosen option's code, beside the label: muted and monospaced so it reads as an identifier
+   rather than as more of the name, and the SHRINKABLE half of the line — in a narrow column the code
+   ellipsises (its title carries it whole) while the label keeps its space. Empty while the list is
+   open, where it collapses to nothing because it has no padding of its own. */
+.ufe-expression-builder .ufe-expr__combo-code {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--ufe-text-muted);
+}
+
+/* ---------------- dropdown entries ---------------- */
+
+.ufe-expression-builder .ufe-expr__autocomplete-option {
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--ufe-text);
+    line-height: 1.4;
+}
+
+/* A dropdown entry of a searchable select is two lines: the label, and the code under it. The code is
+   the line that matters when labels repeat, so it is quiet but never hidden — and it wraps rather
+   than truncating, because half a code identifies nothing. */
+.ufe-expression-builder .ufe-expr__option-label {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ufe-expression-builder .ufe-expr__option-code {
+    display: block;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--ufe-text-muted);
+    word-break: break-all;
+}
+
+.ufe-expression-builder .ufe-expr__autocomplete-option:hover {
+    background: var(--ufe-bg);
+}
+
+/* The keyboard-highlighted entry. Deliberately stronger than :hover — the pointer's own
+   highlight follows the pointer and needs no memory, while this one has to be findable after
+   scrolling a long list, and it is what Enter will commit. */
+.ufe-expression-builder .ufe-expr__autocomplete-option--active,
+.ufe-expression-builder .ufe-expr__autocomplete-option--active:hover {
+    background: var(--ufe-accent-rail);
+    box-shadow: inset 2px 0 0 var(--ufe-accent);
+}
+
+.ufe-expression-builder .ufe-expr__autocomplete-empty {
+    padding: 6px 12px;
+    color: var(--ufe-text-muted);
+    font-size: 12.5px;
+    font-style: italic;
+}
+
+/* Request in flight. Same muted italics as the empty verdict — both are states, not options —
+   and deliberately without the option row's hover, since there is nothing to click. */
+.ufe-expression-builder .ufe-expr__autocomplete-loading {
+    padding: 6px 12px;
+    color: var(--ufe-text-muted);
+    font-size: 12.5px;
+    font-style: italic;
+}
+
+/* Non-interactive advisory line. Two homes, one class: a footer row inside the dropdown (where
+   the rule separates it from the clickable options above) and the transient paste report under
+   the pills, where a top border would draw a stray line across the row instead. */
+.ufe-expression-builder .ufe-expr__autocomplete-hint {
+    padding: 4px 12px;
+    color: var(--ufe-text-muted);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.ufe-expression-builder .ufe-expr__autocomplete-list .ufe-expr__autocomplete-hint {
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px solid var(--ufe-border);
+}
+
+.ufe-expression-builder .ufe-expr__pills + .ufe-expr__autocomplete-hint {
+    padding-left: 2px;
+}
+
+/* ---------------- option tree ---------------- */
+
+/* Collapsible tree mode of the autocomplete dropdown, for hierarchy-annotated option lists.
+   One row, left to right: checkbox, label, count badge, caret. The label takes the slack, so the
+   badge and the caret line up in columns down the list however deep the rows are indented.
+
+   The whole row is the selection target — clicking it selects, clicking it again deselects — which
+   is why the pointer and the hover tint sit here rather than on the label. The per-level indent is
+   an inline padding-left computed from the node's level, and the left border is present in every
+   state (transparent until selected) so turning it accent-coloured never shifts a label sideways. */
+.ufe-expression-builder .ufe-expr__tree-node {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    /* The left padding is the placeholder for the per-level indent the component writes inline. */
+    padding: 4px 8px 4px 5px;
+    border-left: 3px solid transparent;
+    font-size: 13px;
+    color: var(--ufe-text);
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.ufe-expression-builder .ufe-expr__tree-node:hover {
+    background: var(--ufe-bg);
+}
+
+/* Selection state, and hidden from assistive technology: the row's own aria-selected is what
+   announces it. The whole control is one masked Lucide glyph — the element IS the checkbox, with
+   nothing drawn in CSS — so the state is a swap of icon plus colour and the three states differ in
+   shape as well as in colour: an empty box, a box with a tick, a box with a dash for "something
+   inside this branch is selected". Muted while empty, accent once it has anything to say. */
+.ufe-expression-builder .ufe-expr__tree-check {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    background-color: var(--ufe-text-faint);
+    -webkit-mask-image: var(--ufe-icon-square);
+    mask-image: var(--ufe-icon-square);
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+}
+
+.ufe-expression-builder .ufe-expr__tree-check--checked {
+    background-color: var(--ufe-accent);
+    -webkit-mask-image: var(--ufe-icon-square-check);
+    mask-image: var(--ufe-icon-square-check);
+}
+
+.ufe-expression-builder .ufe-expr__tree-check--mixed {
+    background-color: var(--ufe-accent);
+    -webkit-mask-image: var(--ufe-icon-square-minus);
+    mask-image: var(--ufe-icon-square-minus);
+}
+
+/* Entries with something below them carry the weight, so depth reads without counting indents. */
+.ufe-expression-builder .ufe-expr__tree-node--parent .ufe-expr__tree-node-label {
+    font-weight: 600;
+}
+
+/* How many entries sit below this one. Muted and pill-shaped: it is a fact about the branch, not a
+   control, and it must never look like the selected-value pills above the list. */
+.ufe-expression-builder .ufe-expr__tree-count {
+    flex: 0 0 auto;
+    min-width: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--ufe-bg);
+    border: 1px solid var(--ufe-border);
+    color: var(--ufe-text-muted);
+    font-size: 10.5px;
+    font-weight: 400;
+    line-height: 16px;
+    text-align: center;
+}
+
+/* The caret: a transparent button with its own hit area at the row's right edge; the glyph rotates
+   on expand. A leaf node renders the same box invisibly, so the columns hold whether or not a caret
+   exists. */
+.ufe-expression-builder .ufe-expr__tree-toggle {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    background: transparent;
+    color: var(--ufe-text-muted);
+    padding: 0;
+    border-radius: var(--ufe-radius);
+    cursor: pointer;
+}
+
+.ufe-expression-builder .ufe-expr__tree-toggle:hover,
+.ufe-expression-builder .ufe-expr__tree-toggle:focus,
+.ufe-expression-builder .ufe-expr__tree-toggle:active {
+    background: var(--ufe-border);
+    color: var(--ufe-text);
+    outline: 0;
+    text-decoration: none;
+}
+
+.ufe-expression-builder .ufe-expr__tree-toggle > span {
+    display: inline-block;
+    transition: transform 120ms ease;
+}
+
+.ufe-expression-builder .ufe-expr__tree-toggle--open > span {
+    transform: rotate(90deg);
+}
+
+.ufe-expression-builder .ufe-expr__tree-toggle--leaf {
+    visibility: hidden;
+    cursor: default;
+}
+
+.ufe-expression-builder .ufe-expr__tree-node-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A selected node stays a full-strength, fully clickable row — clicking it again is how it is
+   deselected. What marks it is the accent edge and a wash of the accent behind the whole row, so
+   the selected branches of a long list are findable while scrolling. */
+.ufe-expression-builder .ufe-expr__tree-node--selected {
+    background: var(--ufe-accent-soft);
+    border-left-color: var(--ufe-accent);
+}
+
+/* Keyboard-highlighted tree node — the tree's counterpart of the flat list's active entry, on the
+   row rather than on the label, because a node's caret is part of what the arrow keys act on. Its
+   tint is deliberately stronger than the selected wash and it adds a ring instead of a left bar, so
+   a row that is both highlighted and selected still shows which of the two is which. It is the last
+   tree rule and it restates itself for :hover, so the highlight owns the background whichever other
+   state the row is in. */
+.ufe-expression-builder .ufe-expr__tree-node--active,
+.ufe-expression-builder .ufe-expr__tree-node--active:hover {
+    background: var(--ufe-accent-rail);
+    box-shadow: inset 0 0 0 1px var(--ufe-accent-outline);
+}
+
+/* ---------------- reordering ---------------- */
+
+/* The grab point of a node, muted until it is wanted. `touch-action: none` is load-bearing rather
+   than cosmetic: without it a touch drag on the handle scrolls the page and the pointer stream never
+   reaches the capture element. `user-select: none` stops a drag that starts on the glyph from
+   selecting it, for the browsers that begin a selection before the suppressed default action. */
+.ufe-expression-builder .ufe-expr__drag {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    background: transparent;
+    color: var(--ufe-text-faint);
+    width: 22px;
+    height: 28px;
+    border-radius: var(--ufe-radius);
+    padding: 0;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.ufe-expression-builder .ufe-expr__drag:hover,
+.ufe-expression-builder .ufe-expr__drag:focus,
+.ufe-expression-builder .ufe-expr__drag:active {
+    background: var(--ufe-border);
+    color: var(--ufe-text);
+    outline: 0;
+    text-decoration: none;
+}
+
+/* Held down — including while a drag is running, since the pointer capture keeps the handle in its
+   active state for the whole gesture. */
+.ufe-expression-builder .ufe-expr__drag:active {
+    cursor: grabbing;
+}
+
+/* A row's handle fills its gutter on the control line; a group's is a plain flex item in the
+   header. */
+.ufe-expression-builder .ufe-expr__row > .ufe-expr__drag {
+    flex-basis: 22px;
+    height: 34px;
+}
+
+/* The node being dragged stays in place and fades: it is still where it was until the drop lands,
+   and the indicator — not a moving ghost — is what says where it would go. */
+.ufe-expression-builder .ufe-expr__row--dragging,
+.ufe-expression-builder .ufe-expr__group--dragging {
+    opacity: 0.45;
+}
+
+/* One insertion gap, marked. Absolutely positioned inside the element that owns the gap (the node
+   below it, or the group footer for a group's last gap), so appearing and disappearing costs no
+   reflow — which matters because the drop maths measures the very layout this line would otherwise
+   move. The offset centres it on the hairline between siblings. */
+.ufe-expression-builder .ufe-expr__drop-indicator {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -2px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--ufe-accent);
+    z-index: 5;
+}
+
+/* The reorder live region: read aloud, never seen. Clipped to a single pixel rather than hidden
+   with display/visibility, which would take it out of the accessibility tree along with the
+   announcement. */
+.ufe-expression-builder .ufe-expr__move-status {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+/* ---------------- add actions ---------------- */
+
+/* Positioned because it hosts the drop indicator of the group's last gap. */
+.ufe-expression-builder .ufe-expr__group-footer {
+    display: flex;
+    gap: 8px;
+    position: relative;
+    padding: 8px 13px 13px;
+}
+
+.ufe-expression-builder .ufe-expr__group .ufe-expr__group .ufe-expr__group-footer {
+    padding: 8px 11px 11px;
+}
+
+/* Under the rail treatment the add actions align with the rows, past the rail's gutter. */
+.ufe-expression-builder.ufe-expression-builder--joiner-rail .ufe-expr__group-footer {
+    padding-left: 45px;
+}
+
+.ufe-expression-builder.ufe-expression-builder--joiner-rail .ufe-expr__group .ufe-expr__group .ufe-expr__group-footer {
+    padding-left: 37px;
+}
+
+.ufe-expression-builder .ufe-expr__add {
+    border: 1px dashed var(--ufe-border-input);
+    background: #ffffff;
+    color: var(--ufe-text);
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 7px 14px;
+    border-radius: var(--ufe-radius);
+    cursor: pointer;
+    transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.ufe-expression-builder .ufe-expr__add:hover,
+.ufe-expression-builder .ufe-expr__add:focus,
+.ufe-expression-builder .ufe-expr__add:active {
+    border-color: var(--ufe-accent);
+    color: var(--ufe-accent);
+    background: var(--ufe-accent-wash);
+    outline: 0;
+    text-decoration: none;
+}
+
+.ufe-expression-builder .ufe-expr__add--inline {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+/* ---------------- preview block ---------------- */
+
+/* The preview is the card's own footer band: bled to the card's edges so it reads as a summary OF
+   the card rather than one more box inside it. The negative margins undo the root padding. */
+.ufe-expression-builder .ufe-expr__preview-block {
+    margin: 16px -20px -18px;
+    border-top: 1px solid var(--ufe-border);
+    background: var(--ufe-bg);
+    border-radius: 0 0 var(--ufe-radius) var(--ufe-radius);
+    padding: 14px 20px 18px;
+}
+
+/* The preview's heading row: the section title on the left, the match-count badge pushed to the
+   right edge. Aligned on the baseline rather than centred, so the two different type sizes sit on
+   one line of text instead of on one box. */
+.ufe-expression-builder .ufe-expr__preview-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 9px;
+}
+
+.ufe-expression-builder .ufe-expr__preview-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--ufe-text-muted);
+    letter-spacing: 0.11em;
+}
+
+/* Match-count badge: a white pill on the grey band, the number in the palette's green so "how many
+   this selects" reads as an outcome rather than as part of the rule. The pill carries one text
+   node — the consumer's wording arrives with the number already substituted into it. `margin-left:
+   auto` (not a spacer element) parks it at the right edge whatever the title's width, and
+   `white-space: nowrap` keeps the wording on one line beside the title. */
+.ufe-expression-builder .ufe-expr__count {
+    margin-left: auto;
+    background: #ffffff;
+    border: 1px solid var(--ufe-border);
+    border-radius: 999px;
+    padding: 3px 12px;
+    font-size: 11.5px;
+    line-height: 1.4;
+    color: var(--ufe-success);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+/* No count available. Muted red, not the warning list's alarm colouring: a failed count says
+   nothing about whether the rule is valid, and must not read as an error in the rule. */
+.ufe-expression-builder .ufe-expr__count--error {
+    background: #fdf3f3;
+    border-color: #f0d4d4;
+    color: #a35c5c;
+}
+
+/* The preview holds inline token spans; normal whitespace collapses the markup's line breaks
+   into the single spaces separating the tokens. */
+.ufe-expression-builder .ufe-expr__preview {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    background: #ffffff;
+    border: 1px solid var(--ufe-border);
+    border-radius: var(--ufe-radius);
+    padding: 12px 14px;
+    color: var(--ufe-text);
+    font-size: 12px;
+    line-height: 1.7;
+    white-space: normal;
+    word-break: break-word;
+}
+
+/* Structured preview tokens: field names carry the weight, operators recede into small caps,
+   values take the accent, and the AND/OR joiners and parentheses read as quiet structure. */
+.ufe-expression-builder .ufe-expr__preview-field {
+    color: var(--ufe-text);
+    font-weight: 700;
+    font-size: 12.5px;
+}
+
+.ufe-expression-builder .ufe-expr__preview-op {
+    color: var(--ufe-text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+}
+
+.ufe-expression-builder .ufe-expr__preview-value {
+    color: var(--ufe-accent);
+    font-weight: 600;
+    font-size: 12.5px;
+}
+
+.ufe-expression-builder .ufe-expr__preview-paren {
+    color: var(--ufe-text-faint);
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.ufe-expression-builder .ufe-expr__preview-joiner {
+    color: var(--ufe-text-faint);
+    font-weight: 700;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+/* Warnings: the admin palette's yellow note, not an error red — every warning here is advisory
+   (the rule still saves), and the wording arrives from the consumer. */
+.ufe-expression-builder .ufe-expr__warnings {
+    list-style: none;
+    margin: 9px 0 0;
+    padding: 10px 12px;
+    background: var(--ufe-warning-bg);
+    border: 1px solid var(--ufe-border);
+    border-radius: var(--ufe-radius);
+    color: var(--ufe-text);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.ufe-expression-builder .ufe-expr__warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 2px 0;
+}
+
+.ufe-expression-builder .ufe-expr__warning .ufe-expr__icon {
+    margin-top: 2px;
+}
+
+/* Advisory per-operator value validation — a hint under the value editor, never a save gate, and
+   muted for the same reason: it informs while the admin may still be mid-typing. */
+.ufe-expression-builder .ufe-expr__value-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    font-size: 11.5px;
+    color: var(--ufe-text-muted);
+    line-height: 1.45;
+    padding-left: 1px;
+}
+
+.ufe-expression-builder .ufe-expr__value-error .ufe-expr__icon {
+    margin-top: 1px;
+}
+
+/* ---------------- narrow layouts ---------------- */
+
+/* Below the grid's own minimum the three columns stack; the column captions caption nothing
+   stacked, so they leave with the layout that gave them meaning. */
+@media (max-width: 900px) {
+    .ufe-expression-builder .ufe-expr__triplet {
+        grid-template-columns: 1fr;
+    }
+
+    .ufe-expression-builder .ufe-expr__colhead {
+        display: none;
+    }
+}
+
+/* ---------------- keyboard focus ---------------- */
+
+/* Every control above clears the browser's focus ring inside its own :hover/:focus/:active rule,
+   which leaves a keyboard admin with no idea where they are. One ring restored, for exactly the
+   case that needs it: :focus-visible matches keyboard focus — and programmatic focus that followed
+   a keystroke, which is how a newly added row's controls light up — but not a plain mouse click, so
+   the hover styling stays as clean as it was. The outline sits OUTSIDE the control because an
+   accent-filled button would swallow an inner ring, and the halo repeats the one the text inputs
+   already carry, so the whole builder signals focus the same way. */
+.ufe-expression-builder .ufe-expr__aggregator-btn:focus-visible,
+.ufe-expression-builder .ufe-expr__add:focus-visible,
+.ufe-expression-builder .ufe-expr__drag:focus-visible,
+.ufe-expression-builder .ufe-expr__duplicate:focus-visible,
+.ufe-expression-builder .ufe-expr__remove:focus-visible,
+.ufe-expression-builder .ufe-expr__group-duplicate:focus-visible,
+.ufe-expression-builder .ufe-expr__group-remove:focus-visible,
+.ufe-expression-builder .ufe-expr__pill-remove:focus-visible,
+.ufe-expression-builder .ufe-expr__pill--more:focus-visible,
+.ufe-expression-builder .ufe-expr__clear-all:focus-visible,
+.ufe-expression-builder .ufe-expr__tree-action:focus-visible,
+.ufe-expression-builder .ufe-expr__tree-toggle:focus-visible,
+.ufe-expression-builder .ufe-expr__dropdown-done:focus-visible {
+    outline: 2px solid var(--ufe-accent);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 2px var(--ufe-accent-ring);
+}
+
+/* The search input of a pill editor is deliberately borderless — it sits inside the pill box, so
+   the box is what has to light up. Same ring a standalone input gets on focus, one level out. The
+   searchable single-select is built the same way, so it lights up the same way. */
+.ufe-expression-builder .ufe-expr__pills:focus-within,
+.ufe-expression-builder .ufe-expr__combo:focus-within {
+    border-color: var(--ufe-accent);
+    box-shadow: 0 0 0 3px var(--ufe-accent-ring);
+}

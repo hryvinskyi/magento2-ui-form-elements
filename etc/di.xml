@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Copyright (c) 2026. Volodymyr Hryvinskyi. All rights reserved.
+ * Author: Volodymyr Hryvinskyi <volodymyr@hryvinskyi.com>
+ * GitHub: https://github.com/hryvinskyi
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+    <preference for="Hryvinskyi\UiFormElements\Api\ProductAttributeMetaProviderInterface"
+                type="Hryvinskyi\UiFormElements\Model\ProductAttributeMetaProvider"/>
+    <preference for="Hryvinskyi\UiFormElements\Api\OperatorSetPolicyInterface"
+                type="Hryvinskyi\UiFormElements\Model\OperatorSetPolicy"/>
+    <preference for="Hryvinskyi\UiFormElements\Api\CategoryTreeOptionsProviderInterface"
+                type="Hryvinskyi\UiFormElements\Model\CategoryTreeOptionsProvider"/>
+    <preference for="Hryvinskyi\UiFormElements\Api\ConditionTreeValidatorInterface"
+                type="Hryvinskyi\UiFormElements\Model\ConditionTreeValidator"/>
+    <preference for="Hryvinskyi\UiFormElements\Api\AttributeValueSuggesterInterface"
+                type="Hryvinskyi\UiFormElements\Model\AttributeValueSuggester"/>
+    <preference for="Hryvinskyi\UiFormElements\Api\AttributeOptionsProviderInterface"
+                type="Hryvinskyi\UiFormElements\Model\AttributeOptionsProvider"/>
+    <!--
+        Consumer wiring for the attribute-value suggester.
+
+        The preference above intentionally resolves to a suggester with an EMPTY whitelist: every
+        suggest() call answers an empty list. A consumer opts attribute codes in by declaring a
+        virtual type of the suggester that supplies its own `suggestableCodes`, then mapping that
+        virtual type into each class that uses it. Magento resolves <argument> overrides by the
+        constructor parameter NAME on the concrete class (never by the interface a parameter is
+        typed against), so every consuming class must type the parameter as
+        Hryvinskyi\UiFormElements\Api\AttributeValueSuggesterInterface and name it
+        $attributeValueSuggester:
+
+            <virtualType name="VendorModuleAttributeValueSuggester"
+                         type="Hryvinskyi\UiFormElements\Model\AttributeValueSuggester">
+                <arguments>
+                    <argument name="suggestableCodes" xsi:type="array">
+                        <item name="sku" xsi:type="string">sku</item>
+                        <item name="name" xsi:type="string">name</item>
+                    </argument>
+                </arguments>
+            </virtualType>
+            <type name="Vendor\Module\Controller\Adminhtml\Entity\SuggestAttributeValues">
+                <arguments>
+                    <argument name="attributeValueSuggester" xsi:type="object">VendorModuleAttributeValueSuggester</argument>
+                </arguments>
+            </type>
+
+        Both blocks belong in the consumer's own area-specific di.xml (etc/adminhtml/di.xml for
+        admin controllers and ui_component config blocks). A consuming class WITHOUT such a <type>
+        mapping silently receives the bare preference, and with it the empty whitelist.
+    -->
+</config>

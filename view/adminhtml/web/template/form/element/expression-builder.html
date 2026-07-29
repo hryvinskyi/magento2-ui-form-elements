@@ -1,0 +1,74 @@
+<!--
+  ~ Copyright (c) 2026. Volodymyr Hryvinskyi. All rights reserved.
+  ~ Author: Volodymyr Hryvinskyi <volodymyr@hryvinskyi.com>
+  ~ GitHub: https://github.com/hryvinskyi
+  -->
+
+<!-- `visible` is bound here because this element replaces the standard field template, which was the
+     only thing that ever bound it. Without this the observable still flips and nothing errors — the
+     widget just ignores it, so a form that hides this field by switcher rule or by its own setting is
+     silently disobeyed. Keep it on the root: hiding anything less leaves part of the widget on screen.
+     The css binding carries the visual tunables (joiner treatment, density) as modifier classes, so
+     the stylesheet owns everything that follows from those choices. -->
+<div class="ufe-expression-builder" data-bind="visible: visible, css: builderModifierClasses()">
+    <!-- The heading row: the field's own label, when the form XML sets one (this element replaces
+         the standard field template, so nothing else would render it; the text arrives already
+         translated, from the consumer's PHP, and is bound as it came), and the rule-summary chip —
+         the one line that still describes the whole rule while a long one is scrolled. -->
+    <div class="ufe-expr__topbar">
+        <!-- ko if: builderLabel -->
+        <div class="ufe-expr__heading" data-bind="text: builderLabel"></div>
+        <!-- /ko -->
+        <span class="ufe-expr__rule-summary" data-bind="text: ruleSummaryText()"></span>
+    </div>
+    <!-- The whole rule renders through the recursive group template: one group per Combine node,
+         starting at the root group. The data object gives that template its fixed-scope entry
+         points — the group to render, the component as `builder`, and the 1-based nesting depth. -->
+    <div data-bind="template: { name: 'Hryvinskyi_UiFormElements/form/element/expression-group', data: { group: rootGroup(), builder: $data, depth: 1 } }"></div>
+
+    <!-- The whole preview block is a tunable: a form that embeds the builder where the preview
+         would only repeat the obvious switches it off with `showPreview`. -->
+    <!-- ko if: showPreviewBlock() -->
+    <div class="ufe-expr__preview-block">
+        <div class="ufe-expr__preview-header">
+            <div class="ufe-expr__preview-title" data-bind="i18n: 'Expression Preview'"></div>
+            <!-- Match-count badge. Rendered from the first paint and hidden while there is nothing
+                 to count, rather than inserted with its first message: a live region announced only
+                 once it enters the DOM is announced only by chance. Polite, like the preview it sits
+                 above — the number arrives while the admin is still editing and must not interrupt.
+                 The badge exists at all only for consumers that configured a counting endpoint. -->
+            <span class="ufe-expr__count"
+                  aria-live="polite"
+                  data-bind="visible: countBadgeVisible(),
+                             css: { 'ufe-expr__count--error': countState() === 'error' },
+                             text: countBadgeText()"></span>
+        </div>
+        <!-- The structured preview renders the recursive display tree through the preview
+             template — one node per group, XSS-safe text bindings only. An empty rule falls back
+             to the consumer-supplied empty-state message as plain text.
+
+             Both the preview and the warning list are polite live regions: they are the only
+             feedback on what the authored rule now means, and an admin editing with a screen
+             reader has no other way to hear that a change landed. Polite, so each announcement
+             waits for a pause in typing instead of interrupting it. -->
+        <!-- ko if: previewTree() -->
+        <div class="ufe-expr__preview" aria-live="polite" data-bind="template: { name: 'Hryvinskyi_UiFormElements/form/element/expression-preview', data: { node: previewTree(), builder: $data } }"></div>
+        <!-- /ko -->
+        <!-- ko ifnot: previewTree() -->
+        <div class="ufe-expr__preview" aria-live="polite" data-bind="text: emptyStateMessage"></div>
+        <!-- /ko -->
+
+        <!-- Always rendered, hidden while there is nothing to warn about: a live region inserted
+             together with its first message is announced only by chance. The icon is decorative —
+             the warning box's colouring and the text carry the meaning. -->
+        <ul class="ufe-expr__warnings"
+            aria-live="polite"
+            data-bind="visible: ruleWarnings().length > 0, foreach: ruleWarnings">
+            <li class="ufe-expr__warning">
+                <span class="ufe-expr__icon ufe-expr__icon--alert" aria-hidden="true"></span>
+                <span data-bind="text: $data"></span>
+            </li>
+        </ul>
+    </div>
+    <!-- /ko -->
+</div>
