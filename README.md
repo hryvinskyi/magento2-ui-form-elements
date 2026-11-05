@@ -132,7 +132,7 @@ semantics, or cannot count its matches, omits the key rather than getting a wron
 | `label` | string | what the admin sees in the Field dropdown (already translated) |
 | `attribute` | string | the condition's attribute code; omitted for the picker. Also a `coherence.requirements` lookup key |
 | `valueType` | string | `text` \| `select` \| `multiselect` \| `product-attribute` — which value editor renders |
-| `operators` | list | `{value, label}` entries offered for this field |
+| `operators` | list | `{value, label}` entries offered for this field; `list: true` on an entry makes its value a list, like `()`/`!()` |
 | `options` | list | `select`/`multiselect`: `{value, label}`, optionally `+ {level, parent}` (see below) |
 | `attributes` | list | picker only: the attribute descriptors |
 | `placeholder` | string | free-text editor placeholder (already translated); absent → none |

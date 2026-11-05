@@ -5,7 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-11-05
+
+### Added
+- **Membership operators a consumer names.** An operator descriptor may carry `list: true`; the builder then treats
+  that operator like `()`/`!()`: the value editor collects a list, a stored CSV loads as a list, and the list is
+  written back as CSV. A rule engine whose operators are `in`, `not_in` or `between` gets list editors without
+  re-spelling its operators as `()`. The flag is read from the operators the row offers, so a picker attribute's
+  own operator set (`operators` or `operatorSet`) can flag its operators too. Only a literal `true` counts.
+
+## [1.0.0] - 2026-07-27
 
 ### Added
 - **Admin design system.** The builder is restyled onto the Magento admin's own palette (#4a3f39 ink,
@@ -226,8 +235,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flipped, nothing errored, and the builder stayed on screen on first paint and after every change. The root
   now binds `visible`. Hiding also takes a field out of validation, so a `validation` rule on the builder
   can no longer block a save on a form that has hidden it.
-
-## [1.0.0] - 2026-07-27
 
 ### Added
 - Expression-builder `ui_component` admin form element: Knockout component, template and stylesheet, with

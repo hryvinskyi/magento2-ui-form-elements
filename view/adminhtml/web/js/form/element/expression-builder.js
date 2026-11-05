@@ -1259,7 +1259,7 @@ define([
          * @returns {Boolean}
          */
         rowUsesListOperator: function (row) {
-            return expressionValue.isListOperator(row.operator());
+            return expressionValue.isListOperator(row.operator(), this.operatorsFor(row));
         },
 
         valueTypeFor: function (row) {
@@ -4885,13 +4885,14 @@ define([
             // A clone hands its source's retained number over directly; every other caller lets the
             // loaded value speak for itself. ONE test decides, so both routes agree by construction.
             var storedNumber = overrides.storedNumber !== undefined ? overrides.storedNumber : overrides.value;
-
-            return {
+            var row = {
                 kind: 'condition',
                 id: ++rowSeq,
                 fieldType: ko.observable(fieldType),
                 operator: ko.observable(operator),
-                value: ko.observable(expressionValue.normaliseValueIn(field, operator, value)),
+                // Shaped below, once the row can say which operators it offers: a picker row's
+                // attribute may carry its own operator set, and its `list` flags decide the shape.
+                value: ko.observable(value),
                 productAttribute: ko.observable(productAttribute),
                 // Whatever the loaded leaf carried in `is_value_processed`, kept verbatim so the
                 // serialiser can write it back unchanged; a row the admin adds carries null. A plain
@@ -4948,6 +4949,10 @@ define([
                 pasteNotice: ko.observable(''),
                 _pasteTimer: null
             };
+
+            row.value(expressionValue.normaliseValueIn(field, operator, value, this.operatorsFor(row)));
+
+            return row;
         },
 
         /**
@@ -5054,7 +5059,7 @@ define([
             }
             var op = row.operator();
             var rawValue = row.value();
-            var value = expressionValue.serialiseValueOut(field, op, rawValue);
+            var value = expressionValue.serialiseValueOut(field, op, rawValue, this.operatorsFor(row));
 
             if (row.storedNumber !== null && String(row.storedNumber) === value) {
                 value = row.storedNumber;

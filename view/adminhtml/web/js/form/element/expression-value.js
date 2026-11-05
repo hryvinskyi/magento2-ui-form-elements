@@ -362,11 +362,32 @@ define([], function () {
      * an editor re-spelling the operator literals would drift from the shaping rules the moment
      * the set changes.
      *
+     * A consumer whose rule engine spells its membership operators differently (`in`, `not_in`,
+     * `between`) marks them on the operator descriptor with `list: true`; passing the operator
+     * list the row offers lets that flag count. Only a literal `true` does: the flag says what the
+     * stored value is shaped like, so a truthy string must not turn a scalar into a list.
+     *
      * @param {*} operator Operator value from a field's operator descriptor.
+     * @param {Array} [operators] Operator descriptors ({value, label, list}) the row offers.
      * @returns {Boolean}
      */
-    function isListOperator(operator) {
-        return LIST_OPERATORS.indexOf(operator) !== -1;
+    function isListOperator(operator, operators) {
+        if (typeof operator !== 'string') {
+            return false;
+        }
+        if (LIST_OPERATORS.indexOf(operator) !== -1) {
+            return true;
+        }
+        if (!Array.isArray(operators)) {
+            return false;
+        }
+
+        return operators.some(function (descriptor) {
+            return descriptor !== null
+                && typeof descriptor === 'object'
+                && descriptor.value === operator
+                && descriptor.list === true;
+        });
     }
 
     /**
@@ -379,15 +400,17 @@ define([], function () {
      * @param {(Object|null)} field Field descriptor ({valueType, …}) or null.
      * @param {String} operator Current operator value.
      * @param {*} value Stored value: scalar, CSV string or array.
+     * @param {Array} [operators] Operators the row offers; the field's own list when omitted.
      * @returns {*} Array for list-shaped contexts, scalar otherwise.
      */
-    function normaliseValueIn(field, operator, value) {
+    function normaliseValueIn(field, operator, value, operators) {
         var listShaped;
 
         if (!field) {
             return value;
         }
-        listShaped = field.valueType === 'multiselect' || isListOperator(operator);
+        listShaped = field.valueType === 'multiselect'
+            || isListOperator(operator, operators === undefined ? field.operators : operators);
 
         if (listShaped) {
             if (Array.isArray(value)) {
@@ -417,10 +440,12 @@ define([], function () {
      * @param {Object} field Field descriptor ({valueType, …}).
      * @param {String} operator Current operator value.
      * @param {*} value Editor value: scalar or array.
+     * @param {Array} [operators] Operators the row offers; the field's own list when omitted.
      * @returns {String}
      */
-    function serialiseValueOut(field, operator, value) {
-        var listShaped = field.valueType === 'multiselect' || isListOperator(operator);
+    function serialiseValueOut(field, operator, value, operators) {
+        var listShaped = field.valueType === 'multiselect'
+            || isListOperator(operator, operators === undefined ? field.operators : operators);
 
         if (listShaped && Array.isArray(value)) {
             return value.join(',');

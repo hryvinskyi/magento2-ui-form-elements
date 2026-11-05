@@ -82,6 +82,48 @@ export function buildTests(expressionValue) {
         }
     });
 
+    test('isListOperator: an operator its descriptor flags with list: true is a list operator', () => {
+        const operators = [
+            {value: 'in', label: 'is one of', list: true},
+            {value: 'between', label: 'between', list: true},
+            {value: 'eq', label: 'is'},
+            {value: 'loose', label: 'loosely flagged', list: 'yes'},
+        ];
+
+        assert.strictEqual(expressionValue.isListOperator('in', operators), true);
+        assert.strictEqual(expressionValue.isListOperator('between', operators), true);
+        assert.strictEqual(expressionValue.isListOperator('eq', operators), false);
+        // Only a literal true counts: the flag decides what the stored value is shaped like.
+        assert.strictEqual(expressionValue.isListOperator('loose', operators), false);
+        // The flag belongs to the row's operators: the same value elsewhere is a scalar.
+        assert.strictEqual(expressionValue.isListOperator('in'), false);
+        assert.strictEqual(expressionValue.isListOperator('in', [{value: 'eq', list: true}]), false);
+        // The built-in pair stays a list whatever the descriptors say.
+        assert.strictEqual(expressionValue.isListOperator('()', [{value: '()', list: false}]), true);
+        // Junk in the list never throws and never matches.
+        assert.strictEqual(expressionValue.isListOperator('in', [null, 'in', 3, {value: 'in', list: true}]), true);
+        assert.strictEqual(expressionValue.isListOperator('in', 'in'), false);
+    });
+
+    test('normaliseValueIn / serialiseValueOut: a flagged operator shapes the value as a list', () => {
+        const field = {valueType: 'text', operators: [{value: 'in', label: 'is one of', list: true}, {value: 'eq', label: 'is'}]};
+
+        // From the field's own operators when none are passed.
+        assert.deepStrictEqual(expressionValue.normaliseValueIn(field, 'in', 'a,b'), ['a', 'b']);
+        assert.strictEqual(expressionValue.normaliseValueIn(field, 'eq', 'a,b'), 'a,b');
+        assert.strictEqual(expressionValue.serialiseValueOut(field, 'in', ['a', 'b']), 'a,b');
+
+        // The row's operators (a picker attribute's own set) outrank the field's.
+        const attributeOperators = [{value: 'any_in', label: 'any item in', list: true}];
+        assert.deepStrictEqual(expressionValue.normaliseValueIn(field, 'any_in', 'x,y', attributeOperators), ['x', 'y']);
+        assert.strictEqual(expressionValue.normaliseValueIn(field, 'in', 'a,b', attributeOperators), 'a,b');
+        assert.strictEqual(expressionValue.serialiseValueOut(field, 'any_in', ['x', 'y'], attributeOperators), 'x,y');
+
+        // A load → save round trip keeps the stored CSV byte-identical.
+        const loaded = expressionValue.normaliseValueIn(field, 'in', 'SKU-1,SKU-2');
+        assert.strictEqual(expressionValue.serialiseValueOut(field, 'in', loaded), 'SKU-1,SKU-2');
+    });
+
     /* ---------------- pasted lists ---------------- */
 
     test('hasListSeparators: only text carrying a comma, semicolon, tab or newline reads as a list', () => {
