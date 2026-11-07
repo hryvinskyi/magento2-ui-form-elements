@@ -371,5 +371,81 @@ export function buildTests(expressionOptions) {
         }
     });
 
+    /* ---------------- offerOptions / selectedOptions / findOption ---------------- */
+
+    test('offerOptions: a flat list filters labels by substring, leaves out excluded values, caps', () => {
+        const options = [
+            {value: '1', label: 'Red'}, {value: '2', label: 'Dark red'}, {value: '3', label: 'Blue'},
+            {value: 'constructor', label: 'Reddish'}
+        ];
+
+        assert.deepStrictEqual(found(expressionOptions.offerOptions(options, [], ' RED ', 10)), ['1', '2', 'constructor']);
+        assert.deepStrictEqual(found(expressionOptions.offerOptions(options, ['2'], 'red', 10)), ['1', 'constructor']);
+        assert.deepStrictEqual(expressionOptions.offerOptions(options, [], '', 2), {items: options.slice(0, 2), capped: true});
+        assert.deepStrictEqual(found(expressionOptions.offerOptions(options, [1, 'constructor'], '', 10)), ['2', '3'],
+            'excluded values compare as strings, a prototype-named one included');
+    });
+
+    test('offerOptions: a query over a hierarchy searches breadcrumbs; the index is asked for only then', () => {
+        const options = categoryOptions();
+        let built = 0;
+        const indexOf = () => {
+            built++;
+
+            return expressionOptions.buildTreeIndex(options);
+        };
+
+        assert.deepStrictEqual(found(expressionOptions.offerOptions(options, [], '', 100, indexOf)).length, options.length);
+        assert.strictEqual(built, 0);
+        assert.deepStrictEqual(found(expressionOptions.offerOptions(options, ['311'], 'storage', 100, indexOf)), ['31', '312']);
+        assert.strictEqual(built, 1);
+    });
+
+    test('offerOptions: capped reports the breadcrumb walk stopping, before excluded values are dropped', () => {
+        const options = categoryOptions();
+        const result = expressionOptions.offerOptions(options, ['3'], 'components', 1, () => expressionOptions.buildTreeIndex(options));
+
+        assert.deepStrictEqual(result, {items: [], capped: true});
+    });
+
+    test('offerOptions: a hierarchy answer of null falls back to the flat search', () => {
+        const options = [{value: '1', label: 'Alpha'}];
+
+        assert.deepStrictEqual(found(expressionOptions.offerOptions(options, [], 'alp', 10, () => null)), ['1']);
+    });
+
+    test('selectedOptions: the options a stored list holds, in option order', () => {
+        const options = categoryOptions();
+
+        assert.deepStrictEqual(values(expressionOptions.selectedOptions(options, ['41', 3, 'gone'])), ['3', '41']);
+        assert.deepStrictEqual(expressionOptions.selectedOptions(options, []), []);
+        assert.deepStrictEqual(expressionOptions.selectedOptions(null, ['3']), []);
+    });
+
+    test('findOption: the option a value stands for, compared as strings, or null', () => {
+        const options = categoryOptions();
+
+        assert.strictEqual(expressionOptions.findOption(options, 31), options[1]);
+        assert.strictEqual(expressionOptions.findOption(options, 'gone'), null);
+        assert.strictEqual(expressionOptions.findOption(undefined, '3'), null);
+    });
+
+    /* ---------------- displayLabel / optionCode ---------------- */
+
+    test('displayLabel: the leading run of dashes and spaces goes, nothing else', () => {
+        assert.strictEqual(expressionOptions.displayLabel('— — SSDs'), 'SSDs');
+        assert.strictEqual(expressionOptions.displayLabel('– - Memory - DDR'), 'Memory - DDR');
+        assert.strictEqual(expressionOptions.displayLabel('Plain'), 'Plain');
+        assert.strictEqual(expressionOptions.displayLabel(null), '');
+        assert.strictEqual(expressionOptions.displayLabel(42), '42');
+    });
+
+    test('optionCode: the code as a second line, unless it repeats the label', () => {
+        assert.strictEqual(expressionOptions.optionCode({value: 'zz_brand', label: 'Brand'}), 'zz_brand');
+        assert.strictEqual(expressionOptions.optionCode({value: 'Brand', label: 'Brand'}), '');
+        assert.strictEqual(expressionOptions.optionCode({value: 7, label: '7'}), '');
+        assert.strictEqual(expressionOptions.optionCode({value: null, label: undefined}), '');
+    });
+
     return tests;
 }

@@ -23,7 +23,7 @@ use PHPUnit\Framework\TestCase;
  * must short-circuit BEFORE the collection factory is touched, and no internal failure may ever
  * escape as an exception.
  */
-final class AttributeValueSuggesterTest extends TestCase
+class AttributeValueSuggesterTest extends TestCase
 {
     /**
      * @var CollectionFactory&MockObject
@@ -163,6 +163,30 @@ final class AttributeValueSuggesterTest extends TestCase
                 ['value' => 'Laptop B', 'label' => 'Laptop B'],
             ],
             $suggester->suggest('name', ' lap ')
+        );
+    }
+
+    /**
+     * Rows that are not data objects are skipped, and so is a value with no string form — it
+     * counts as empty, like a blank one.
+     *
+     * @return void
+     */
+    public function testRowsAndValuesWithoutAStringFormAreSkipped(): void
+    {
+        $this->collection->method('getIterator')->willReturn(new \ArrayIterator([
+            'not a product row',
+            new DataObject(['name' => ['Laptop', 'array']]),
+            new DataObject(['name' => new \stdClass()]),
+            new DataObject(['name' => 'Laptop C']),
+        ]));
+        $this->collectionFactory->method('create')->willReturn($this->collection);
+
+        $suggester = new AttributeValueSuggester($this->collectionFactory, ['name']);
+
+        self::assertSame(
+            [['value' => 'Laptop C', 'label' => 'Laptop C']],
+            $suggester->suggest('name', 'lap')
         );
     }
 

@@ -1,0 +1,11 @@
+{
+  "name": "hryvinskyi-ui-form-elements-browser-tests",
+  "private": true,
+  "description": "Browser component tests of the expression builder, run in Chromium by Playwright.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0"
+  }
+}

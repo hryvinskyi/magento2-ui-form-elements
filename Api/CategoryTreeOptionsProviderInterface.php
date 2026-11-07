@@ -24,8 +24,9 @@ namespace Hryvinskyi\UiFormElements\Api;
 interface CategoryTreeOptionsProviderInterface
 {
     /**
-     * Every category below the invisible global root, ordered by path so a parent always precedes
-     * its children.
+     * Every category below the invisible global root, each parent ahead of its children.
+     *
+     * The list is ordered by path, so a parent always precedes its children.
      *
      * `value` is the category id, `label` the plain category name with no indentation prefixes
      * (hierarchy is expressed by `level`/`parent`, never baked into the label), `level` the tree

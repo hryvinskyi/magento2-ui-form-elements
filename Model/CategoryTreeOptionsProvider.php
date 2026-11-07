@@ -21,7 +21,7 @@ use Magento\Store\Model\Store;
  * every parent precedes its children — which lets clients build the tree in one linear scan. The
  * result is memoised because one form typically renders the same list in more than one picker.
  */
-final class CategoryTreeOptionsProvider implements CategoryTreeOptionsProviderInterface
+class CategoryTreeOptionsProvider implements CategoryTreeOptionsProviderInterface
 {
     /**
      * Memoised options — a full category-tree read is expensive and the list is immutable within a
@@ -60,17 +60,32 @@ final class CategoryTreeOptionsProvider implements CategoryTreeOptionsProviderIn
             if (!$category instanceof DataObject) {
                 continue;
             }
-            $level = (int)$category->getData('level');
+            $level = $this->intField($category, 'level');
             $name = $category->getData('name');
+            $entityId = $category->getData('entity_id');
             $options[] = [
-                'value' => (string)$category->getData('entity_id'),
+                'value' => is_scalar($entityId) || $entityId instanceof \Stringable ? (string)$entityId : '',
                 'label' => is_scalar($name) ? (string)$name : '',
                 'level' => $level,
                 // A level-1 root's parent is the excluded global root, so it gets no parent at all.
-                'parent' => $level > 1 ? (string)(int)$category->getData('parent_id') : '',
+                'parent' => $level > 1 ? (string)$this->intField($category, 'parent_id') : '',
             ];
         }
 
         return $this->options = $options;
+    }
+
+    /**
+     * A numeric column of the category row as an integer; a missing or non-scalar value reads as 0.
+     *
+     * @param DataObject $category Category row
+     * @param string $field Column name
+     * @return int The column's integer value, or 0
+     */
+    private function intField(DataObject $category, string $field): int
+    {
+        $value = $category->getData($field);
+
+        return is_scalar($value) ? (int)$value : 0;
     }
 }

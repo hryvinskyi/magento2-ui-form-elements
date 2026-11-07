@@ -1,0 +1,6 @@
+.DS_Store
+.phpunit.result.cache
+/Test/Js/node_modules/
+/Test/Js/test-results/
+/Test/Js/playwright-report/
+/Test/Js/blob-report/

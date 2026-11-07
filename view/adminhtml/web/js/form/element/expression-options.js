@@ -23,6 +23,11 @@
  * order, because a flat list of several hundred entries has no structure to lean on: the first
  * few rows are all an admin reads, so which rows those are is the whole experience.
  *
+ * Around those two sit the questions an editor asks of its list: which options a list-valued
+ * editor still offers for a query (`offerOptions`), which options a stored list holds
+ * (`selectedOptions`), which option one value stands for (`findOption`), and how a chosen option
+ * reads once chosen (`displayLabel`, `optionCode`).
+ *
  * Everything is side-effect free and dependency-free — plain values in, plain values out — so
  * the same file runs in the admin bundle and under plain Node (Test/Js/run.mjs). No user-facing
  * text lives here: the path separator is data formatting, not wording.
@@ -353,9 +358,141 @@ define([], function () {
         return {items: items, capped: scored.length > items.length};
     }
 
+    /**
+     * The options a list-valued editor still offers for a query, capped, plus whether the cap
+     * truncated the search.
+     *
+     * Values already in `excludedValues` are never offered — picking one twice would add nothing.
+     * A non-blank query over a hierarchy (`treeIndexOf` answering an index) searches by breadcrumb
+     * path, so an ambiguous leaf name narrows by naming its ancestors; every other query filters
+     * labels by substring, case-insensitively. The index is asked for only once a query exists,
+     * because building it is the one expensive step and a blank query never needs it.
+     *
+     * `capped` means the search STOPPED at the cap, not that a known number of matches is hidden:
+     * in the breadcrumb branch the cap applies to the walk, before excluded values are dropped,
+     * so the returned list can be shorter than the cap while the search was still truncated.
+     *
+     * @param {Array.<{value: *, label: *}>} options The editor's option list.
+     * @param {Array} excludedValues Values not to offer; compared as strings.
+     * @param {*} query The editor's search text.
+     * @param {Number} cap Maximum number of matches.
+     * @param {Function} [treeIndexOf] Answers the list's index from buildTreeIndex() when the list
+     *     is a hierarchy, or null when it is flat.
+     * @returns {{items: Array.<Object>, capped: Boolean}}
+     */
+    function offerOptions(options, excludedValues, query, cap, treeIndexOf) {
+        var list = Array.isArray(options) ? options : [];
+        var search = String(query || '').toLowerCase().trim();
+        var excluded = Object.create(null);
+        var index = null;
+        var found;
+        var matches = [];
+        var i;
+
+        for (i = 0; i < excludedValues.length; i++) {
+            excluded[String(excludedValues[i])] = true;
+        }
+
+        if (search !== '' && typeof treeIndexOf === 'function') {
+            index = treeIndexOf();
+        }
+
+        if (index) {
+            found = pathSearch(index, search, cap);
+
+            return {
+                items: found.items.filter(function (option) {
+                    return excluded[String(option.value)] !== true;
+                }),
+                capped: found.capped
+            };
+        }
+
+        for (i = 0; i < list.length; i++) {
+            if (excluded[String(list[i].value)] !== true
+                && (search === '' || String(list[i].label).toLowerCase().indexOf(search) !== -1)) {
+                matches.push(list[i]);
+            }
+        }
+
+        return {items: matches.slice(0, cap), capped: matches.length > cap};
+    }
+
+    /**
+     * The options whose values a stored list holds, in option-list order.
+     *
+     * @param {Array.<{value: *}>} options Option list.
+     * @param {Array} values Stored values; compared as strings.
+     * @returns {Array.<Object>} The caller's own option objects.
+     */
+    function selectedOptions(options, values) {
+        var selected = Object.create(null);
+        var list = Array.isArray(options) ? options : [];
+        var i;
+
+        for (i = 0; i < values.length; i++) {
+            selected[String(values[i])] = true;
+        }
+
+        return list.filter(function (option) {
+            return selected[String(option.value)] === true;
+        });
+    }
+
+    /**
+     * The option a single value stands for, compared as strings, or null when none carries it.
+     *
+     * @param {Array.<{value: *}>} options Option list.
+     * @param {*} value The chosen value.
+     * @returns {Object|null}
+     */
+    function findOption(options, value) {
+        var wanted = String(value);
+        var list = Array.isArray(options) ? options : [];
+        var i;
+
+        for (i = 0; i < list.length; i++) {
+            if (String(list[i].value) === wanted) {
+                return list[i];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * A label without the leading depth prefix — dashes and spaces — some option sources render
+     * hierarchy into. The prefix helps while browsing a list and only gets in the way once an
+     * option is chosen, so pills, previews and pasted names read the bare label.
+     *
+     * @param {*} label Option label; null and undefined read as ''.
+     * @returns {String}
+     */
+    function displayLabel(label) {
+        return String(label === null || label === undefined ? '' : label).replace(/^[\s\u2014\u2013-]+/, '');
+    }
+
+    /**
+     * An option's code as a second line under its label — '' when the code IS the label, which
+     * would print the same words twice. Many option lists are keyed by the label itself.
+     *
+     * @param {{value: *, label: *}} option
+     * @returns {String}
+     */
+    function optionCode(option) {
+        var code = toKey(option.value);
+
+        return code === toKey(option.label) ? '' : code;
+    }
+
     return {
         buildTreeIndex: buildTreeIndex,
         pathSearch: pathSearch,
-        optionSearch: optionSearch
+        optionSearch: optionSearch,
+        offerOptions: offerOptions,
+        selectedOptions: selectedOptions,
+        findOption: findOption,
+        displayLabel: displayLabel,
+        optionCode: optionCode
     };
 });

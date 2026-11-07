@@ -10,7 +10,10 @@
  * The serialised field value is a nested Magento condition tree: Combine nodes nesting to arbitrary
  * depth with leaf condition objects between them. This module converts that tree to and from a plain
  * recursive group model, answers structural questions about the model (which conditions a node is
- * guaranteed to hold under, group enumeration, node movement, insertion slots) and runs the
+ * guaranteed to hold under, group enumeration, node movement, insertion slots, how deep a subtree
+ * nests and how many conditions it holds, what a group directly holds, which aggregator a nested
+ * group starts on), reads a stored field value into the model and writes the model back as the
+ * field value, and runs the
  * satisfiability check over same-attribute constraint rows. Structure only: everything about the
  * values inside a leaf — editor shapes, typed-editor detection, validators — lives in its sibling
  * expression-value.js. Everything here is side-effect free and framework-free — plain objects in,
@@ -172,8 +175,8 @@ define(['underscore'], function (_) {
      *
      * Inverse of treeToModel. Groups left without children are dropped recursively — a group whose
      * children all dropped drops too — except the root, which is always returned as a Combine
-     * object even when childless (mapping the childless root to the field's empty value is the
-     * component's decision, not this module's).
+     * object even when childless (serialiseModel() maps a childless root to the field's empty
+     * value).
      *
      * @param {GroupNode} model Root group.
      * @param {String} combineType Condition class name to write into Combine nodes.
@@ -217,6 +220,32 @@ define(['underscore'], function (_) {
     }
 
     /**
+     * What the other children of an 'all' group guarantee to the child at one index: every other
+     * condition child, and the closure of every other child group that is itself 'all'.
+     *
+     * @param {GroupNode} group An 'all' group.
+     * @param {Number} skipIndex Index of the child the guarantees are for.
+     * @returns {Array.<ConditionNode>}
+     */
+    function siblingGuarantees(group, skipIndex) {
+        var guaranteed = [];
+
+        _.each(group.children || [], function (child, idx) {
+            if (idx === skipIndex) {
+                return;
+            }
+
+            if (isObjectLike(child) && child.kind === 'condition') {
+                guaranteed.push(child);
+            } else if (isGroup(child) && child.aggregator === 'all') {
+                guaranteed = guaranteed.concat(conjunctiveClosure(child));
+            }
+        });
+
+        return guaranteed;
+    }
+
+    /**
      * The condition nodes guaranteed to hold whenever the node addressed by `path` is relevant.
      *
      * Walks the ancestor chain from the root. Every ancestor group with aggregator 'all' (the
@@ -247,19 +276,7 @@ define(['underscore'], function (_) {
             onPathIndex = indexes[depth];
 
             if (current.aggregator === 'all') {
-                /* eslint-disable no-loop-func */
-                _.each(current.children || [], function (child, idx) {
-                    if (idx === onPathIndex) {
-                        return;
-                    }
-
-                    if (isObjectLike(child) && child.kind === 'condition') {
-                        scope.push(child);
-                    } else if (isGroup(child) && child.aggregator === 'all') {
-                        scope = scope.concat(conjunctiveClosure(child));
-                    }
-                });
-                /* eslint-enable no-loop-func */
+                scope = scope.concat(siblingGuarantees(current, onPathIndex));
             }
 
             next = (current.children || [])[onPathIndex];
@@ -482,72 +499,301 @@ define(['underscore'], function (_) {
     }
 
     /**
+     * How many group levels a node occupies: 0 for a condition, 1 for a group whose children are
+     * all conditions, and one more for each further level of nesting inside it.
+     *
+     * This is what lets a depth cap survive a MOVE: a group carries its subtree with it, so placing
+     * a node into a group at depth d puts its deepest group at d + height(node).
+     *
+     * @param {GroupNode|ConditionNode} node
+     * @returns {Number}
+     */
+    function height(node) {
+        var tallest = 0;
+
+        if (!isGroup(node)) {
+            return 0;
+        }
+        _.each(node.children || [], function (child) {
+            var childHeight = height(child);
+
+            if (childHeight > tallest) {
+                tallest = childHeight;
+            }
+        });
+
+        return tallest + 1;
+    }
+
+    /**
+     * How many condition nodes the subtree below a group holds, at any depth.
+     *
+     * @param {GroupNode} group
+     * @returns {Number}
+     */
+    function conditionCount(group) {
+        var count = 0;
+
+        if (!isGroup(group)) {
+            return 0;
+        }
+        _.each(group.children || [], function (child) {
+            count += isGroup(child) ? conditionCount(child) : 1;
+        });
+
+        return count;
+    }
+
+    /**
+     * A row's value read as the list of values it names: arrays as strings, a CSV string split, and
+     * anything falsy as no values at all.
+     *
+     * @param {*} value
+     * @returns {Array.<String>}
+     */
+    function listedValues(value) {
+        if (_.isArray(value)) {
+            return _.map(value, String);
+        }
+
+        return value ? String(value).split(',') : [];
+    }
+
+    /**
+     * A set holding exactly one value.
+     *
+     * @param {String} value
+     * @returns {Object.<String, Boolean>}
+     */
+    function singleton(value) {
+        var set = Object.create(null);
+
+        set[value] = true;
+
+        return set;
+    }
+
+    /**
+     * How each operator narrows what a shared attribute can still be, keyed by operator. Each
+     * handler updates the running state — `possible` (null while unconstrained, otherwise the set
+     * of values still possible) and `excluded` — and answers true once no value can be left.
+     *
+     * A closed set: these are the four operators whose meaning this check knows; a row under any
+     * other operator constrains nothing. The sets are created without a prototype, so a value that
+     * spells an Object.prototype member constrains like any other value.
+     */
+    var CONSTRAINTS = {
+        '==': function (state, value) {
+            var val = String(value);
+
+            if (state.excluded[val]) {
+                return true;
+            }
+
+            if (state.possible !== null && !state.possible[val]) {
+                return true;
+            }
+            state.possible = singleton(val);
+
+            return false;
+        },
+        '!=': function (state, value) {
+            var val = String(value);
+
+            state.excluded[val] = true;
+
+            if (state.possible && state.possible[val]) {
+                delete state.possible[val];
+
+                return _.keys(state.possible).length === 0;
+            }
+
+            return false;
+        },
+        '()': function (state, value) {
+            var listed = listedValues(value);
+            var set = Object.create(null);
+            var intersection;
+
+            if (listed.length === 0) {
+                return false;
+            }
+            _.each(listed, function (v) {
+                if (!state.excluded[v]) {
+                    set[v] = true;
+                }
+            });
+
+            if (_.keys(set).length === 0) {
+                return true;
+            }
+
+            if (state.possible === null) {
+                state.possible = set;
+
+                return false;
+            }
+            intersection = Object.create(null);
+            _.each(_.keys(set), function (k) {
+                if (state.possible[k]) {
+                    intersection[k] = true;
+                }
+            });
+            state.possible = intersection;
+
+            return _.keys(intersection).length === 0;
+        },
+        '!()': function (state, value) {
+            var listed = listedValues(value);
+
+            _.each(listed, function (v) {
+                state.excluded[v] = true;
+            });
+
+            if (!state.possible) {
+                return false;
+            }
+            _.each(listed, function (v) {
+                delete state.possible[v];
+            });
+
+            return _.keys(state.possible).length === 0;
+        }
+    };
+
+    /**
      * Satisfiability check over constraint rows that all target one shared attribute.
      *
      * Tracks the set of values still possible after applying every row in order: `==` narrows to a
      * single value, `!=` excludes one value, `()` intersects with a set, `!()` excludes a set. The
      * rows contradict when no value can satisfy all of them — two different equalities, an equality
      * against an exclusion of the same value, membership sets with an empty intersection, or an
-     * exclusion removing the last remaining possibility.
+     * exclusion removing the last remaining possibility. A row under any other operator is
+     * ignored, and the walk stops at the first contradiction.
      *
      * @param {Array.<{operator: String, value: *}>} contextRows Operator/value pairs of the rows
      *     to check together; values may be scalars, CSV strings or arrays.
      * @returns {Boolean} True when the rows can never hold at the same time.
      */
     function solveContradictions(contextRows) {
-        var possible = null; // null means unconstrained
-        var excluded = {};
-        var contradiction = false;
+        var state = {possible: null, excluded: Object.create(null)};
+        var rows = _.isArray(contextRows) ? contextRows : [];
+        var i;
+        var row;
 
-        _.each(contextRows, function (row) {
-            if (contradiction) return;
-            var op = row.operator;
-            var value = row.value;
-            var listedValues = _.isArray(value) ? _.map(value, String) : (value ? String(value).split(',') : []);
+        for (i = 0; i < rows.length; i++) {
+            row = rows[i];
 
-            if (op === '==') {
-                var val = String(value);
-                if (excluded[val]) { contradiction = true; return; }
-                if (possible === null) {
-                    possible = {}; possible[val] = true;
-                } else if (!possible[val]) {
-                    contradiction = true;
-                } else {
-                    possible = {}; possible[val] = true;
-                }
-            } else if (op === '!=') {
-                var val2 = String(value);
-                excluded[val2] = true;
-                if (possible && possible[val2]) {
-                    delete possible[val2];
-                    if (_.keys(possible).length === 0) contradiction = true;
-                }
-            } else if (op === '()') {
-                if (listedValues.length === 0) return;
-                var set = {};
-                _.each(listedValues, function (v) { if (!excluded[v]) set[v] = true; });
-                if (_.keys(set).length === 0) { contradiction = true; return; }
-                if (possible === null) {
-                    possible = set;
-                } else {
-                    var intersection = {};
-                    _.each(_.keys(set), function (k) { if (possible[k]) intersection[k] = true; });
-                    if (_.keys(intersection).length === 0) contradiction = true;
-                    possible = intersection;
-                }
-            } else if (op === '!()') {
-                _.each(listedValues, function (v) { excluded[v] = true; });
-                if (possible) {
-                    _.each(listedValues, function (v) { delete possible[v]; });
-                    if (_.keys(possible).length === 0) contradiction = true;
-                }
+            if (Object.prototype.hasOwnProperty.call(CONSTRAINTS, row.operator)
+                && CONSTRAINTS[row.operator](state, row.value)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The aggregator a group nested into one with this aggregator starts on: the other word —
+     * nesting a group almost always means switching between AND and OR.
+     *
+     * @param {*} aggregator The parent group's aggregator.
+     * @returns {('all'|'any')}
+     */
+    function oppositeAggregator(aggregator) {
+        return aggregator === 'all' ? 'any' : 'all';
+    }
+
+    /**
+     * The group model a stored field value loads as: a JSON string is decoded, an already-decoded
+     * tree is taken as it is. No value, malformed JSON and a decoded value that is not a tree all
+     * load as an empty root group.
+     *
+     * @param {*} raw The field value.
+     * @param {String} combineType Condition class name that marks Combine nodes.
+     * @returns {GroupNode}
+     */
+    function modelFromStoredValue(raw, combineType) {
+        var tree = null;
+
+        if (raw) {
+            try {
+                tree = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            } catch (e) {
+                tree = null;
+            }
+        }
+
+        return tree ? treeToModel(tree, combineType) : {kind: 'group', aggregator: 'all', children: []};
+    }
+
+    /**
+     * The field value a group model saves as: the frozen Combine shape as JSON, or '' — the field's
+     * "no rule" value — when no condition is left once empty groups are dropped.
+     *
+     * @param {GroupNode} model Root group.
+     * @param {String} combineType Condition class name to write into Combine nodes.
+     * @returns {String}
+     */
+    function serialiseModel(model, combineType) {
+        var tree = modelToTree(model, combineType);
+
+        if (!tree.conditions || tree.conditions.length === 0) {
+            return '';
+        }
+
+        return JSON.stringify(tree);
+    }
+
+    /**
+     * What a group holds directly: its condition children, its child groups, and the two facts the
+     * group's markup renders from — whether a condition sits in it (the column captions caption
+     * nothing over a group of groups) and whether it is empty (an empty group is dropped on save,
+     * and says so). What a nested group holds is that group's own to state.
+     *
+     * @param {Array.<{kind: String}>} children The group's direct children.
+     * @returns {{conditions: Number, groups: Number, hasConditions: Boolean, empty: Boolean}}
+     */
+    function groupContents(children) {
+        var groups = 0;
+        var conditions = 0;
+
+        _.each(children, function (child) {
+            if (isGroup(child)) {
+                groups++;
+            } else {
+                conditions++;
             }
         });
 
-        return contradiction;
+        return {
+            conditions: conditions,
+            groups: groups,
+            hasConditions: conditions > 0,
+            empty: conditions + groups === 0
+        };
+    }
+
+    /**
+     * The rule's one-line summary: how many conditions it holds at any depth, and how deep it
+     * nests — stated only once a group nests inside another, null before that.
+     *
+     * @param {GroupNode} model Root group.
+     * @returns {{conditions: Number, depth: (Number|null)}}
+     */
+    function ruleSummary(model) {
+        var depth = height(model);
+
+        return {conditions: conditionCount(model), depth: depth > 1 ? depth : null};
     }
 
     return {
+        normaliseAggregator: normaliseAggregator,
+        oppositeAggregator: oppositeAggregator,
+        modelFromStoredValue: modelFromStoredValue,
+        serialiseModel: serialiseModel,
+        groupContents: groupContents,
+        ruleSummary: ruleSummary,
         treeToModel: treeToModel,
         modelToTree: modelToTree,
         conjunctiveClosure: conjunctiveClosure,
@@ -556,6 +802,8 @@ define(['underscore'], function (_) {
         moveNode: moveNode,
         slotList: slotList,
         excludeSubtree: excludeSubtree,
+        height: height,
+        conditionCount: conditionCount,
         solveContradictions: solveContradictions
     };
 });

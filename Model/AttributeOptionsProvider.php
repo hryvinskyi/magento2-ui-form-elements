@@ -25,7 +25,7 @@ use Magento\Eav\Model\Entity\Attribute\Source\Table as TableSource;
  * code, at the moment the picker actually needs it. Every lookup is defensive: a broken source
  * model degrades to an empty list instead of failing the request.
  */
-final class AttributeOptionsProvider implements AttributeOptionsProviderInterface
+class AttributeOptionsProvider implements AttributeOptionsProviderInterface
 {
     /**
      * The synthetic rule attribute for category membership — not a real EAV attribute, so the EAV
@@ -77,8 +77,9 @@ final class AttributeOptionsProvider implements AttributeOptionsProviderInterfac
      * Only option-backed input types are read at all. Table-backed sources are asked without the
      * empty option and with admin/default labels; other sources take no parameters, and the empty
      * option they might emit is dropped by the value filter below either way. Options with an
-     * empty or array value (option groups) are skipped; any source failure collapses to an empty
-     * list so one broken source model cannot take down the endpoint.
+     * empty or array value (option groups), or a value with no string form, are skipped; a label
+     * with no string form falls back to the value. Any source failure collapses to an empty list
+     * so one broken source model cannot take down the endpoint.
      *
      * @param AbstractAttribute $attribute Attribute whose source to read
      * @param string $inputType Its frontend input type
@@ -101,15 +102,34 @@ final class AttributeOptionsProvider implements AttributeOptionsProviderInterfac
 
         $options = [];
         foreach ($rawOptions as $option) {
-            if (!is_array($option) || !isset($option['value']) || $option['value'] === '' || is_array($option['value'])) {
+            if (!is_array($option)) {
+                continue;
+            }
+            $rawValue = $option['value'] ?? null;
+            $value = $rawValue === '' ? null : $this->text($rawValue);
+            if ($value === null) {
                 continue;
             }
             $options[] = [
-                'value' => (string)$option['value'],
-                'label' => (string)($option['label'] ?? $option['value']),
+                'value' => $value,
+                'label' => $this->text($option['label'] ?? null) ?? $value,
             ];
         }
 
         return $options;
+    }
+
+    /**
+     * The string form of an option's value or label, or null when it has none.
+     *
+     * Scalars and Phrase-like objects render as text; null, arrays (option groups) and objects
+     * without a string form have no text.
+     *
+     * @param mixed $value Raw value or label from the source model
+     * @return string|null Its text, or null
+     */
+    private function text(mixed $value): ?string
+    {
+        return is_scalar($value) || $value instanceof \Stringable ? (string)$value : null;
     }
 }

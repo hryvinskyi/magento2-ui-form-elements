@@ -11,6 +11,7 @@ namespace Hryvinskyi\UiFormElements\Model;
 
 use Hryvinskyi\UiFormElements\Api\AttributeValueSuggesterInterface;
 use Magento\Catalog\Model\ResourceModel\Product\CollectionFactory;
+use Magento\Framework\DataObject;
 
 /**
  * LIKE-based product attribute value lookup with a construction-time whitelist.
@@ -22,7 +23,7 @@ use Magento\Catalog\Model\ResourceModel\Product\CollectionFactory;
  * unwhitelisted attribute — long-text attributes stay out by construction, keeping type-ahead
  * responses small.
  */
-final class AttributeValueSuggester implements AttributeValueSuggesterInterface
+class AttributeValueSuggester implements AttributeValueSuggesterInterface
 {
     /**
      * Whitelisted attribute codes, normalised at construction.
@@ -33,7 +34,7 @@ final class AttributeValueSuggester implements AttributeValueSuggesterInterface
 
     /**
      * @param CollectionFactory $productCollectionFactory Product collection factory for the LIKE lookup
-     * @param array<int|string, mixed> $suggestableCodes Attribute codes eligible for lookup; every
+     * @param array<int|string,mixed> $suggestableCodes Attribute codes eligible for lookup; every
      *     entry is cast to string, empty and non-stringable entries are dropped
      * @param int $maxResults Result cap per lookup
      * @param int $minQueryLength Minimum trimmed query length before a lookup runs
@@ -98,7 +99,8 @@ final class AttributeValueSuggester implements AttributeValueSuggesterInterface
      * Fetch up to the result cap of distinct values of the attribute matching the query.
      *
      * The whitelist and length guards have already run by the time this executes — only a
-     * whitelisted attribute code ever reaches the collection.
+     * whitelisted attribute code ever reaches the collection. A value with no string form (an
+     * array, an object that cannot be rendered) counts as empty and is skipped.
      *
      * @param string $attributeCode Whitelisted attribute code
      * @param string $query Case-insensitive substring to match
@@ -116,7 +118,11 @@ final class AttributeValueSuggester implements AttributeValueSuggesterInterface
         $items = [];
         $seen = [];
         foreach ($collection as $product) {
-            $value = (string)$product->getData($attributeCode);
+            if (!$product instanceof DataObject) {
+                continue;
+            }
+            $data = $product->getData($attributeCode);
+            $value = is_scalar($data) || $data instanceof \Stringable ? (string)$data : '';
             if ($value === '' || isset($seen[$value])) {
                 continue;
             }

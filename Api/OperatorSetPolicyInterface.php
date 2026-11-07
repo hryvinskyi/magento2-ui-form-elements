@@ -26,8 +26,9 @@ use Magento\Framework\Phrase;
 interface OperatorSetPolicyInterface
 {
     /**
-     * Operator descriptors for an attribute input type, or null when no meaningful subset exists for
-     * that type and the caller should fall back to its field-level operator list.
+     * Operator descriptors for an attribute input type, or null when it has no meaningful subset.
+     *
+     * On null the caller falls back to its field-level operator list.
      *
      * Recognised input types: `boolean`, `select`, `multiselect`, `price`, `decimal`, `weight`,
      * `date`, `datetime`. A text attribute stored in a numeric backend column should be passed as
@@ -40,8 +41,10 @@ interface OperatorSetPolicyInterface
     public function forInputType(string $inputType): ?array;
 
     /**
-     * The membership pair — `()` "is in" and `!()` "is not in" — the only operators whose behaviour
-     * differs from one another on multiselect attributes such as category assignments.
+     * The membership pair: `()` "is in" and `!()` "is not in".
+     *
+     * They are the only operators whose behaviour differs from one another on multiselect
+     * attributes such as category assignments.
      *
      * @return list<array{value: string, label: Phrase}> Exactly the two membership operator descriptors
      */

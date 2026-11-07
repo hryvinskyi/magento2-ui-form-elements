@@ -1,0 +1,13 @@
+parameters:
+    level: 10
+    paths:
+        - Api
+        - Model
+        - Test
+    excludePaths:
+        - vendor (?)
+    bootstrapFiles:
+        - ../../../../vendor/autoload.php
+    scanDirectories:
+        - ../../../../generated/code
+        - ../../../../dev/tests/integration/framework

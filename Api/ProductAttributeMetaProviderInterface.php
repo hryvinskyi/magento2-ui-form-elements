@@ -41,12 +41,21 @@ interface ProductAttributeMetaProviderInterface
      * the base currency code for `price`-input attributes, the configured weight unit for
      * `weight`-input ones, '' everywhere else. A code, not a phrase — never translated.
      *
-     * @param array<int|string, mixed> $attributeOptions `code => label` map as returned by a rule
+     * @param array<int|string,mixed> $attributeOptions `code => label` map as returned by a rule
      *     condition's `loadAttributeOptions()`; labels may be strings or Phrase objects — anything
      *     else falls back to the code
      * @param list<string> $suggestableCodes Attribute codes the consumer's value-autocomplete
      *     endpoint accepts (its whitelist)
-     * @return list<array{value: string, label: string, inputType: string, hasOptions: bool, suggest: bool, operatorSet: string|null, unit: string, scalarType?: string}>
+     * @return list<array{
+     *     value: string,
+     *     label: string,
+     *     inputType: string,
+     *     hasOptions: bool,
+     *     suggest: bool,
+     *     operatorSet: string|null,
+     *     unit: string,
+     *     scalarType?: string
+     * }>
      *     Attribute descriptors in the input map's order; `scalarType` appears only where the
      *     input type alone would resolve the wrong editor (numeric-backed text attributes)
      */

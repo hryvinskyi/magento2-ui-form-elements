@@ -3,6 +3,46 @@
  * Author: Volodymyr Hryvinskyi <volodymyr@hryvinskyi.com>
  * GitHub: https://github.com/hryvinskyi
  */
+
+/**
+ * The expression builder's Knockout component — the presentation layer over the pure modules
+ * beside it.
+ *
+ * It owns what only a browser component can: the observable view-model tree the templates render,
+ * the bindings' accessors, every user-facing phrase, focus, timers, sending the requests to the
+ * consumer's endpoints, the pointer drag's state, and the field value it keeps in step with the
+ * authored tree. Every rule it applies lives in a pure module and is tested under plain Node
+ * (Test/Js/run.mjs); the component asks the question, hands the module the row's facts through a
+ * probe, and applies the answer:
+ *
+ * - expression-tree.js — the condition tree's structure, the field value it loads from and saves
+ *   as, what a group holds, the rule's summary
+ * - expression-value.js — leaf-value shapes, the value-type and validator registries, the scalar
+ *   editor's rules
+ * - expression-options.js — option-list indexing, search and offers
+ * - expression-config.js — reading the consumer's config and the tunables
+ * - expression-fields.js — what a field descriptor says about a row, what a row carries over when
+ *   its field or attribute changes, the plain or searchable single-select
+ * - expression-condition.js — one stored leaf ⇄ the state of its row
+ * - expression-coherence.js — which fields a row may pick, and the rule's warnings
+ * - expression-reorder.js — where a node may move, by pointer or by keyboard, where each gap is
+ *   measured and where the drop indicator sits, the depth cap
+ * - expression-listbox.js — the dropdowns' keyboard pattern, their variants and what each one does
+ *   on a commit, who owns the open list, what a closed searchable select shows
+ * - expression-option-tree.js — the hierarchical picker's view state, its expand-all limit, toggling
+ * - expression-list-value.js — editing a list value: append, remove, pills, clear-all, paste
+ * - expression-preview.js — the structured preview's shape and its tokens
+ * - expression-count.js — the match-count badge's rules
+ * - expression-remote-options.js — the attribute-option and value-suggest endpoints' contract
+ * - expression-requests.js — which request supersedes which, the deadline, the teardown
+ *
+ * One more module beside it is an adapter rather than a rule: expression-drag.js does a pointer
+ * drag's DOM work (the pointer capture, the Escape listener, measuring the rendered nodes) for
+ * this component, which keeps the drag's state.
+ *
+ * The public surface is unchanged by that split: the templates call the same members, and a
+ * consumer's ui_component config passes the same options.
+ */
 define([
     'Magento_Ui/js/form/element/abstract',
     'ko',
@@ -10,15 +50,43 @@ define([
     'mage/translate',
     'Hryvinskyi_UiFormElements/js/form/element/expression-tree',
     'Hryvinskyi_UiFormElements/js/form/element/expression-value',
-    'Hryvinskyi_UiFormElements/js/form/element/expression-options'
-], function (Abstract, ko, _, $t, expressionTree, expressionValue, expressionOptions) {
+    'Hryvinskyi_UiFormElements/js/form/element/expression-options',
+    'Hryvinskyi_UiFormElements/js/form/element/expression-config',
+    'Hryvinskyi_UiFormElements/js/form/element/expression-fields',
+    'Hryvinskyi_UiFormElements/js/form/element/expression-condition',
+    'Hryvinskyi_UiFormElements/js/form/element/expression-coherence',
+    'Hryvinskyi_UiFormElements/js/form/element/expression-reorder',
+    'Hryvinskyi_UiFormElements/js/form/element/expression-listbox',
+    'Hryvinskyi_UiFormElements/js/form/element/expression-option-tree',
+    'Hryvinskyi_UiFormElements/js/form/element/expression-list-value',
+    'Hryvinskyi_UiFormElements/js/form/element/expression-preview',
+    'Hryvinskyi_UiFormElements/js/form/element/expression-count',
+    'Hryvinskyi_UiFormElements/js/form/element/expression-remote-options',
+    'Hryvinskyi_UiFormElements/js/form/element/expression-requests',
+    'Hryvinskyi_UiFormElements/js/form/element/expression-drag'
+], function (
+    Abstract,
+    ko,
+    _,
+    $t,
+    expressionTree,
+    expressionValue,
+    expressionOptions,
+    expressionConfig,
+    expressionFields,
+    expressionCondition,
+    expressionCoherence,
+    expressionReorder,
+    expressionListbox,
+    expressionOptionTree,
+    expressionListValue,
+    expressionPreview,
+    expressionCount,
+    expressionRemoteOptions,
+    expressionRequests,
+    expressionDrag
+) {
     'use strict';
-
-    /**
-     * Field type of the built-in attribute picker. This is the component's own vocabulary, unlike the
-     * attribute codes and context values, which every consumer supplies through its config.
-     */
-    var PRODUCT_ATTRIBUTE_PICKER = 'product_attribute_picker';
 
     /**
      * The structured preview's template, by the name the builder template renders it under.
@@ -50,8 +118,8 @@ define([
      * comment as an example would be extracted like any other, so examples here name the phrases
      * without spelling out the call.
      *
-     * Both rules are enforced by the unit suite, in the same test that keeps i18n/en_US.csv equal to
-     * the set of phrases this module actually renders.
+     * No test enforces either rule, nor keeps i18n/en_US.csv equal to the phrases this module
+     * renders: both are kept in review. The pure modules carry no wording at all.
      */
 
     /**
@@ -77,28 +145,14 @@ define([
     };
 
     /**
-     * Keys the dropdown key pattern reserves, plus the bare modifiers.
-     *
-     * Everything outside this set edits the text in the input, which invalidates a highlight that
-     * points into the list the PREVIOUS query produced — so any key not named here drops the
-     * highlight. The modifiers are named because pressing one on its own changes no text and so
-     * invalidates nothing. Membership is tested with `!== true`, never truthiness, so a key name
-     * that happens to spell an Object.prototype member cannot read as reserved.
+     * The nudge under a value editor, by what the editor still needs (expression-value
+     * emptyValueNeeds()): nothing once it holds a value, and a phrase shaped by the editor while it
+     * is empty — list-valued editors take several values, every other editor one.
      */
-    var NAVIGATION_KEYS = {
-        'ArrowDown': true,
-        'ArrowUp': true,
-        'ArrowLeft': true,
-        'ArrowRight': true,
-        'Home': true,
-        'End': true,
-        'Enter': true,
-        'Escape': true,
-        'Tab': true,
-        'Shift': true,
-        'Control': true,
-        'Alt': true,
-        'Meta': true
+    var EMPTY_VALUE_HINTS = {
+        'none': '',
+        'several': $t('Pick at least one value to complete this condition.'),
+        'one': $t('Enter a value to complete this condition.')
     };
 
     /**
@@ -164,9 +218,7 @@ define([
          */
         'attribute-value': {
             options: function (component, row) {
-                var info = component.productAttributeInfo(row);
-
-                return info && info.options ? info.options : [];
+                return expressionFields.valueOptions(component.productAttributeInfo(row));
             },
             selected: function (component, row) {
                 return row.value();
@@ -174,6 +226,121 @@ define([
             commit: function (component, row, value) {
                 row.value(value);
             }
+        }
+    };
+
+    /**
+     * How the component applies each action the dropdown keyboard pattern resolves a key into
+     * (expression-listbox.js). A closed set: one entry per action the pattern can answer with.
+     */
+    var DROPDOWN_KEY_ACTIONS = {
+        'none': function () {},
+        'clearHighlight': function (component, row) {
+            row.activeOptionIndex(-1);
+        },
+        'close': function (component, row) {
+            component.closeDropdown(row);
+        },
+        'open': function (component, row) {
+            component.openDropdown(row);
+        },
+        'highlight': function (component, row, action) {
+            row.activeOptionIndex(action.index);
+            component._scrollHighlightIntoView(row);
+        },
+        'commit': function (component, row, action) {
+            component.commitDropdownItem(row, action.item);
+        },
+        'toggleSelection': function (component, row, action) {
+            component.toggleTreeNode(row, action.value);
+        },
+        'toggleExpansion': function (component, row, action) {
+            component.toggleNode(row, action.value);
+        }
+    };
+
+    /**
+     * How the component applies what a value editor does with a key the dropdown pattern left alone
+     * (expression-listbox editorKeyFallthrough()).
+     */
+    var EDITOR_KEY_ACTIONS = {
+        'none': function () {},
+        'commitText': function (component, row) {
+            component.commitFreeTextValue(row);
+        }
+    };
+
+    /**
+     * The entries each dropdown variant (expression-listbox dropdownVariant()) offers, by the same
+     * component accessor the variant's template renders from — so a list the keyboard walks is the
+     * list on screen. A closed set: one entry per variant the classifier can answer with. What a
+     * variant does with a commit, whether it adds to a list and whether its open list is on screen
+     * are expression-listbox's rules.
+     */
+    var DROPDOWN_ITEMS = {
+        'select': function (component, row) {
+            return component.filteredSearchableOptions(row, row.dropdownControl()).items;
+        },
+        'tree': function (component, row) {
+            return component.visibleTreeNodes(row);
+        },
+        'suggest': function (component, row) {
+            return row.suggestedOptions();
+        },
+        'list': function (component, row) {
+            return component.filteredDropdownOptions(row).items;
+        }
+    };
+
+    /**
+     * How the component applies each action a dropdown commit resolves into
+     * (expression-listbox variantCommit()), each through the method the entry's click binding
+     * calls, so Enter does what a click on the entry does. A closed set: one entry per action the
+     * variants can answer with.
+     */
+    var DROPDOWN_COMMIT_ACTIONS = {
+        'settle': function (component, row, value) {
+            component.commitSearchableSelect(row, row.dropdownControl(), value);
+        },
+        'toggleExpansion': function (component, row, value) {
+            component.toggleNode(row, value);
+        },
+        'toggleSelection': function (component, row, value) {
+            component.toggleTreeNode(row, value);
+        },
+        'replace': function (component, row, value) {
+            row.value(value);
+            component.closeDropdown(row);
+        },
+        'append': function (component, row, value) {
+            component.addOption(row, value);
+        }
+    };
+
+    /**
+     * How the component applies what a tree node's toggle resolves into
+     * (expression-option-tree selectionToggle()), through the same writes a pill's remove button
+     * and an option click perform.
+     */
+    var TREE_SELECTION_ACTIONS = {
+        'deselect': function (component, row, value) {
+            component.removeOption(row, value);
+        },
+        'select': function (component, row, value) {
+            component.addOption(row, value);
+        }
+    };
+
+    /**
+     * The element whose box anchors an insertion slot's gap (expression-reorder slotAnchor()), by
+     * its DOM id.
+     */
+    var SLOT_ANCHOR_IDS = {
+        'child': function (component, group, anchor) {
+            return component.nodeDomId(group.children()[anchor.child]);
+        },
+        'add': function (component, group) {
+            return component.groupAddDomId(group);
         }
     };
 
@@ -292,6 +459,8 @@ define([
         },
 
         initialize: function () {
+            var config;
+
             this._super();
 
             // Every computed this element creates, kept for destroy(): a computed outlives the
@@ -302,33 +471,22 @@ define([
             // A consumer's form-XML label is the builder's own heading. `label` itself is cleared
             // (see `defaults`) so the framework's field wrap stays suppressed either way; without
             // this the configured wording would simply never be rendered anywhere.
-            this.builderLabel = typeof this.label === 'string' ? this.label : '';
+            this.builderLabel = expressionConfig.textOrEmpty(this.label);
             this.label = '';
 
-            this.fields = (this.builderConfig && this.builderConfig.fields) || [];
-            this.combineType = (this.builderConfig && this.builderConfig.combineType) || '';
-            this.suggestUrl = (this.builderConfig && this.builderConfig.suggestUrl) || '';
-            // Wording and semantic rules are consumer-supplied: what an empty rule means, and which
-            // field types need a supporting context row, differ per domain. Absent config = no gating,
-            // no warnings. Strings arrive already translated from the PHP config.
-            this.emptyStateMessage = (this.builderConfig && this.builderConfig.emptyStateMessage) || '';
-            this.coherence = (this.builderConfig && this.builderConfig.coherence) || {};
-            // Match counting is opt-in per consumer: only a domain that can actually count what a
-            // tree selects supplies an endpoint. No endpoint = no badge at all, nothing requested.
-            // The wording around the number is the consumer's too, since only it knows what is
-            // being counted and in which scope; the component owns the number's formatting and
-            // the transient states.
-            this.countUrl = (this.builderConfig && this.builderConfig.countUrl) || '';
-            this.countLabel = (this.builderConfig && this.builderConfig.countLabel) || '';
-            this.countStoreId = this._storeId(this.builderConfig && this.builderConfig.countStoreId);
-            // Attribute option lists are on-demand: a descriptor says only that a list exists,
-            // and this endpoint answers one attribute's list the moment that attribute is
-            // actually selected. No endpoint = optioned attributes degrade to free text.
-            this.optionsUrl = (this.builderConfig && this.builderConfig.optionsUrl) || '';
-            // The shared operator sets attribute descriptors name via `operatorSet` instead of
-            // each embedding the same operator objects. Absent map = named sets resolve to
-            // nothing and those attributes fall back to their field's operator list.
-            this.operatorSets = (this.builderConfig && this.builderConfig.operatorSets) || {};
+            // Wording and semantic rules are consumer-supplied, already translated by PHP; absent
+            // keys mean no endpoint, no gating and no warnings (expression-config.js).
+            config = expressionConfig.readBuilderConfig(this.builderConfig);
+            this.fields = config.fields;
+            this.combineType = config.combineType;
+            this.suggestUrl = config.suggestUrl;
+            this.emptyStateMessage = config.emptyStateMessage;
+            this.coherence = config.coherence;
+            this.countUrl = config.countUrl;
+            this.countLabel = config.countLabel;
+            this.countStoreId = config.countStoreId;
+            this.optionsUrl = config.optionsUrl;
+            this.operatorSets = config.operatorSets;
 
             // Sanitise the numeric tunables once, back onto the instance, so every use site can
             // read this.<name> verbatim instead of re-checking a value that may have come from XML.
@@ -344,20 +502,17 @@ define([
             // below its own minimum, so a component querying under it would render "no matches" for
             // input the backend never even looked at. A config that publishes the minimum therefore
             // outranks both the defaults value and any XML override of it.
-            this.suggestMinQuery = this._configuredNumber(
-                this.builderConfig && this.builderConfig.suggestMinQuery,
+            this.suggestMinQuery = expressionConfig.positiveNumber(
+                config.suggestMinQuery,
                 this._tunable('suggestMinQuery')
             );
             // The visual tunables follow the same contract as the numbers above: junk from the
             // XML degrades to the shipped value, never to a modifier class nothing styles.
-            this.joinerStyle = this._tunableChoice('joinerStyle', ['rail', 'chip', 'none']);
-            this.density = this._tunableChoice('density', ['comfortable', 'compact']);
-            this.showPreview = this.showPreview !== false;
+            this.joinerStyle = this._tunableChoice('joinerStyle', expressionConfig.JOINER_STYLES);
+            this.density = this._tunableChoice('density', expressionConfig.DENSITIES);
+            this.showPreview = expressionConfig.enabledUnlessFalse(this.showPreview);
 
-            this.fieldsByType = {};
-            _.each(this.fields, function (field) {
-                this.fieldsByType[field.type] = field;
-            }, this);
+            this.fieldsByType = expressionConfig.indexFieldsByType(this.fields);
 
             // The authored expression is one recursive group tree: every group carries an all/any
             // aggregator and nests to arbitrary depth, leaves are condition rows. This mirrors the
@@ -384,10 +539,6 @@ define([
             this.matchCount = ko.observable(null);
             this.countCapped = ko.observable(false);
             this.countState = ko.observable('idle');
-            // Monotonic id of the newest count request. Every write to the observables above
-            // carries the id it belongs to and is dropped when a newer one exists, which is what
-            // makes overlapping requests safe — see _setCount.
-            this._countSeq = 0;
             this._countTimer = null;
             // Serialised tree the current count state belongs to, so a re-evaluation that produces
             // the same tree changes nothing. A plain field, deliberately not an observable: the
@@ -407,12 +558,24 @@ define([
             // keyboard moves and pointer drops alike — a move is invisible to a screen reader
             // otherwise, since the rendered order is all that changed.
             this.moveAnnouncement = ko.observable('');
-            // Pointer identity and the element holding its capture, kept only for the release —
-            // plain fields, since nothing renders from them.
-            this._dragPointerId = null;
-            this._dragHandle = null;
-            // The document-level Escape listener installed for the duration of a drag.
-            this._dragEscapeHandler = null;
+            // The drag's DOM work — the pointer capture, the Escape listener, measuring the
+            // rendered nodes — on the document this element is rendered in.
+            this._drag = expressionDrag.createPointerDrag(document);
+
+            // Every request this element sends, by what it answers for: a newer one aborts the one
+            // it supersedes, each has a deadline, and destroy() aborts them all — so no answer is
+            // ever written into a view-model that has moved on or been discarded.
+            this._requests = expressionRequests.createRequestTracker({
+                abortController: function () {
+                    return new window.AbortController();
+                },
+                setTimer: function (callback, delay) {
+                    return window.setTimeout(callback, delay);
+                },
+                clearTimer: function (timer) {
+                    window.clearTimeout(timer);
+                }
+            });
 
             // The pending focus deferral, if any — see _focusLater.
             this._focusTimer = null;
@@ -487,14 +650,15 @@ define([
          * A form can destroy and rebuild a field — a modal closing, a dynamic-rows entry being
          * removed — and everything below survives that on its own otherwise: a live computed keeps
          * re-walking the authored tree and writing into a data scope nobody reads, a pending timer
-         * fires into a discarded view-model, and a drag that was in flight leaves a document-level
-         * key listener and a pointer capture behind, both of which outlive every element they were
-         * created for.
+         * fires into a discarded view-model, a request in flight answers into it, and a drag that
+         * was in flight leaves a document-level key listener and a pointer capture behind, both of
+         * which outlive every element they were created for.
          *
          * Order matters. The computeds go first, so tearing the rest down cannot make one
-         * re-evaluate; the drag release is last because it writes observables the disposed
-         * computeds no longer watch. Every step is idempotent, which is what makes a destroy
-         * without a running drag — the normal case — cost nothing.
+         * re-evaluate; the requests are aborted before anything else can start one, and an answer
+         * already on its way is dropped rather than written; the drag release is last because it
+         * writes observables the disposed computeds no longer watch. Every step is idempotent,
+         * which is what makes a destroy with nothing in flight — the normal case — cost nothing.
          *
          * @param {Boolean} [skipUpdate] Framework flag, passed through untouched.
          * @returns {void}
@@ -506,6 +670,7 @@ define([
                 }
             });
             this._disposables = [];
+            this._requests.dispose();
 
             if (this._countTimer) {
                 clearTimeout(this._countTimer);
@@ -551,18 +716,15 @@ define([
             }, this);
         },
 
-        /* ---------------- numeric tunables & numeric config ---------------- */
+        /* ---------------- tunables ---------------- */
 
         /**
-         * Reads one of the numeric tunables off the instance, coerced and sanity-checked.
+         * Reads one of the numeric tunables off the instance as a positive finite number.
          *
          * The value arrives from `defaults` merged with whatever a form's ui_component XML set for
-         * this field, so it can be anything a human typed into XML: a non-numeric string, zero, a
-         * negative number. Anything but a positive finite number degrades to the class-level
-         * default — the shipped value in `defaults`, which instance config cannot reach — because
-         * the alternative is a NaN travelling into a slice() bound, a setTimeout delay or a
-         * query-length threshold, which blanks a dropdown or stalls the type-ahead with no error
-         * anywhere. The final floor only triggers if this file's own `defaults` entry is broken.
+         * this field. Anything unusable degrades to the class-level default — the shipped value in
+         * `defaults`, which instance config cannot reach; the final floor of 1 only triggers if this
+         * file's own `defaults` entry is broken.
          *
          * @param {String} name Tunable's key in `defaults`.
          * @returns {Number} A positive finite number.
@@ -570,16 +732,12 @@ define([
         _tunable: function (name) {
             var shipped = (this.constructor && this.constructor.defaults) || {};
 
-            return this._configuredNumber(this[name], this._configuredNumber(shipped[name], 1));
+            return expressionConfig.positiveNumber(this[name], expressionConfig.positiveNumber(shipped[name], 1));
         },
 
         /**
-         * Reads one of the string tunables off the instance, constrained to its known values.
-         *
-         * Same contract as the numeric guard above: the value can be anything a human typed into
-         * a form's XML, and anything outside the allowed set degrades to the class-level default —
-         * the alternative is a modifier class no stylesheet defines, which renders as whichever
-         * treatment happens to be the CSS default with no error anywhere.
+         * Reads one of the string tunables off the instance, constrained to its known values;
+         * anything else degrades to the class-level default.
          *
          * @param {String} name Tunable's key in `defaults`.
          * @param {Array.<String>} allowed Values the tunable may take.
@@ -588,38 +746,7 @@ define([
         _tunableChoice: function (name, allowed) {
             var shipped = (this.constructor && this.constructor.defaults) || {};
 
-            return _.contains(allowed, this[name]) ? this[name] : shipped[name];
-        },
-
-        /**
-         * One value coerced to a positive finite number, or the fallback when it is anything else.
-         *
-         * @param {*} value Candidate value, from config or XML.
-         * @param {Number} fallback Value to use when the candidate is unusable.
-         * @returns {Number}
-         */
-        _configuredNumber: function (value, fallback) {
-            var number = Number(value);
-
-            return isFinite(number) && number > 0 ? number : fallback;
-        },
-
-        /**
-         * A configured store id as a non-negative integer.
-         *
-         * Deliberately NOT routed through the positive-number guard above: for a store id 0 is a
-         * meaningful value ("not scoped to one store"), not a broken one, so it must survive
-         * unchanged. Anything unusable — absent, non-numeric, negative — also reads as 0, which is
-         * what a counting endpoint falls back to anyway, so the component and the endpoint agree on
-         * the scope even when the config is junk.
-         *
-         * @param {*} value Candidate store id, from config.
-         * @returns {Number} A non-negative integer.
-         */
-        _storeId: function (value) {
-            var number = Number(value);
-
-            return isFinite(number) && number > 0 ? Math.floor(number) : 0;
+            return expressionConfig.oneOf(this[name], allowed, shipped[name]);
         },
 
         /* ---------------- nesting depth ---------------- */
@@ -629,7 +756,8 @@ define([
          * guard on the "add group" action.
          *
          * Depth counts the outermost group as 1, so a group at depth d puts its children at d + 1
-         * and the answer is simply whether that still fits under the cap. The cap arrives through
+         * and the answer is whether that still fits under the cap (expression-reorder
+         * canNestGroupAt()). The cap arrives through
          * the sanitised tunable rather than as a literal here, so the authoring button and the
          * reorder paths cannot end up disagreeing about how deep a rule may go.
          *
@@ -637,59 +765,29 @@ define([
          * @returns {Boolean}
          */
         canAddGroupAt: function (depth) {
-            return depth < this.maxGroupDepth;
+            return expressionReorder.canNestGroupAt(depth, this.maxGroupDepth);
         },
 
         /**
          * How many group levels a node occupies: 0 for a condition row, 1 for a group whose
-         * children are all rows, and one more for each further level of nesting inside it.
-         *
-         * This is what makes the cap survive a MOVE. A slot's own depth only says where the moved
-         * node's root would land; a group carries its subtree with it, so the level that actually
-         * has to fit is the deepest one inside it — placing a node into a group at depth d puts its
-         * deepest group at d + heightOf(node). A row occupies no group level at all, which is why a
-         * row can always be dropped anywhere the tree already allows.
+         * children are all rows, one more per further level (expression-tree height()).
          *
          * @param {Object} node Row or group view-model.
          * @returns {Number}
          */
         _heightOf: function (node) {
-            var tallest = 0;
-
-            if (node.kind !== 'group') {
-                return 0;
-            }
-            _.each(node.children(), function (child) {
-                var height = this._heightOf(child);
-
-                if (height > tallest) {
-                    tallest = height;
-                }
-            }, this);
-
-            return tallest + 1;
+            return expressionTree.height(this._shapeOf(node));
         },
 
         /**
          * True when moving a node into one insertion slot keeps the whole tree inside the depth cap.
-         *
-         * A slot path is its receiving group's path plus the insertion index, so the path's LENGTH
-         * is that group's depth (the root group's slots are one index long and the root is depth 1).
-         *
-         * Nothing here is asked about the pair of slots describing the node's CURRENT placement: the
-         * slot walk locates that pair on the unfiltered list and both reorder paths start past it. So
-         * a node stays movable even in a stored tree that already nests deeper than this cap — no
-         * clamping happens on load, and the destinations still offered are exactly the ones that
-         * bring it back inside the cap. Inside such an over-deep group the reverse holds too:
-         * shuffling siblings there is refused, because every slot in it is one level too deep to
-         * accept anything.
          *
          * @param {Array.<Number>} slotPath Receiving group path plus insertion index.
          * @param {Object} node Row or group view-model being moved.
          * @returns {Boolean}
          */
         _slotFits: function (slotPath, node) {
-            return slotPath.length + this._heightOf(node) <= this.maxGroupDepth;
+            return expressionReorder.slotFits(slotPath, this._heightOf(node), this.maxGroupDepth);
         },
 
         /* ---------------- public Knockout-bound methods ---------------- */
@@ -709,8 +807,7 @@ define([
          * @param {Object} group Group view-model receiving the row.
          */
         addRowToGroup: function (group) {
-            var defaultField = this.fields.length > 0 ? this.fields[0] : null;
-            var row = this._buildRow(defaultField);
+            var row = this._buildRow(expressionFields.defaultField(this.fields));
 
             group.children.push(row);
             this._focusLater(this.rowFieldDomId(row));
@@ -725,7 +822,7 @@ define([
          * @param {Object} group Parent group view-model.
          */
         addGroupToGroup: function (group) {
-            var child = this._buildGroup(group.aggregator() === 'all' ? 'any' : 'all');
+            var child = this._buildGroup(expressionTree.oppositeAggregator(group.aggregator()));
 
             group.children.push(child);
             this._focusLater(this.groupAddDomId(child));
@@ -969,28 +1066,22 @@ define([
         /**
          * Builds a fresh row view-model carrying the same condition as the source row.
          *
-         * Re-running _buildRow is what guarantees freshness: the id and every transient
-         * observable (searchText, dropdownOpen, expandedNodes, suggest state, activeOptionIndex,
-         * pillsExpanded, pasteNotice) are newly created, never shared — and the clone starts with no pending
-         * paste-hint timer, so the source row's hint cannot expire onto the copy. The value is
-         * deep-copied first (array slice) so pill edits on either row
-         * never leak into the other. The clone serialises identically to the source: it carries
-         * the same fieldType/operator/value/productAttribute and the same two retained storage
-         * shapes (is_value_processed, storedNumber), which is everything _conditionFromRow reads.
+         * Re-running _buildRow is what guarantees freshness: the id and every transient observable
+         * are newly created, never shared, and the clone starts with no pending paste-hint timer.
+         * The value is copied (expression-condition cloneOverrides()) so pill edits on either row
+         * never leak into the other, and the clone serialises identically to the source.
          *
          * @param {Object} row Row view-model to clone.
          * @returns {Object} Fresh row view-model.
          */
         _cloneRowVm: function (row) {
-            var value = row.value();
-
-            return this._buildRow(this.fieldsByType[row.fieldType()], {
+            return this._buildRow(this.fieldsByType[row.fieldType()], expressionCondition.cloneOverrides({
                 operator: row.operator(),
-                value: _.isArray(value) ? value.slice() : value,
+                value: row.value(),
                 productAttribute: row.productAttribute(),
                 isValueProcessed: row.isValueProcessed,
                 storedNumber: row.storedNumber
-            });
+            }));
         },
 
         /**
@@ -1096,21 +1187,24 @@ define([
         /**
          * Switches a row to another field: operator, value and sub-picker reset to the new
          * field's defaults, and the multi-value transients (collapsed pill list, paste hint,
-         * dropdown highlight) reset with them — they described the value that just went away.
+         * dropdown highlight) reset with them — they described the value that just went away
+         * (expression-fields fieldSwitchState()).
          *
          * @param {Object} row Row view-model.
          * @param {String} fieldType Type of the newly selected field.
          */
         setField: function (row, fieldType) {
+            var state;
+
             row.fieldType(fieldType);
-            var field = this.fieldsByType[fieldType];
-            if (!field) {
+            state = expressionFields.fieldSwitchState(this.fieldsByType[fieldType]);
+
+            if (state === null) {
                 return;
             }
-            var operators = field.operators || [];
-            row.operator(operators.length ? operators[0].value : '==');
-            row.value(this._defaultValueForField(field));
-            row.productAttribute(field.attributes && field.attributes.length ? field.attributes[0].value : '');
+            row.operator(state.operator);
+            row.value(state.value);
+            row.productAttribute(state.productAttribute);
             row.pillsExpanded(false);
             row.activeOptionIndex(-1);
             this._clearPasteNotice(row);
@@ -1120,128 +1214,64 @@ define([
          * Called when the Product Attribute sub-picker changes — different attributes can have
          * different operator subsets (e.g. category_ids vs SKU), so reset the operator to a value
          * that's valid for the new attribute, and clear the value/searchText to avoid carrying
-         * incompatible state across. The collapsed pill list, any paste hint and the dropdown
-         * highlight reset too: all three described the previous attribute's values.
+         * incompatible state across (expression-fields attributeSwitchState()). The collapsed pill
+         * list, any paste hint and the dropdown highlight reset too: all three described the
+         * previous attribute's values.
+         *
+         * @param {Object} row Row view-model.
+         * @param {String} attributeCode The newly picked attribute.
          */
         setProductAttribute: function (row, attributeCode) {
+            var state;
+
             row.productAttribute(attributeCode);
-            var operators = this.operatorsFor(row);
-            var currentOp = row.operator();
-            var stillValid = _.some(operators, function (op) { return op.value === currentOp; });
-            if (!stillValid) {
-                row.operator(operators.length ? operators[0].value : '==');
-            }
-            row.value(this.productAttributeHasOptions(row) ? [] : '');
+            state = expressionFields.attributeSwitchState(
+                this.operatorsFor(row),
+                row.operator(),
+                this.productAttributeHasOptions(row)
+            );
+            row.operator(state.operator);
+            row.value(state.value);
             row.searchText('');
             this._setSuggestions(row, []);
             row.pillsExpanded(false);
             this._clearPasteNotice(row);
         },
 
+        /**
+         * The operators the row offers: its field's, or the ones its picked attribute narrows them
+         * to (expression-fields operatorsFor()).
+         *
+         * @param {Object} row Row view-model.
+         * @returns {Array.<Object>}
+         */
         operatorsFor: function (row) {
-            var field = this.fieldsByType[row.fieldType()];
-            var attrInfo;
-            var named;
-            if (!field) {
-                return [];
-            }
-            // For Product Attribute rows the selected attribute can override the operator list —
-            // explicitly, with an `operators` array pinned on the descriptor, or by NAMING one of
-            // the shared sets the config published once (`operatorSet`), e.g. category_ids →
-            // membership only; boolean → is / is-not. Own-property tested so a set name that
-            // spells an Object.prototype member cannot resolve to one.
-            if (field.type === PRODUCT_ATTRIBUTE_PICKER) {
-                attrInfo = this.productAttributeInfo(row);
-                if (attrInfo && _.isArray(attrInfo.operators) && attrInfo.operators.length) {
-                    return attrInfo.operators;
-                }
-                named = attrInfo && typeof attrInfo.operatorSet === 'string'
-                    && Object.prototype.hasOwnProperty.call(this.operatorSets, attrInfo.operatorSet)
-                    ? this.operatorSets[attrInfo.operatorSet]
-                    : null;
-                if (_.isArray(named) && named.length) {
-                    return named;
-                }
-            }
-            return field.operators || [];
+            return expressionFields.operatorsFor(
+                this.fieldsByType[row.fieldType()] || null,
+                this.productAttributeInfo(row),
+                this.operatorSets
+            );
         },
 
         /**
          * Returns the list of selectable Field types for a given row's dropdown.
          *
-         * Restriction is evaluated against the row's conjunctive scope: the conditions guaranteed
-         * to hold whenever the row is relevant — its AND-siblings, the other children of AND
-         * ancestors and the closure of nested AND-subgroups. A field with a coherence requirement
-         * (looked up by its type or its attribute) is selectable only when that scope contains a
-         * context condition targeting one of the requirement's contexts, so OR-joined branches
-         * never borrow each other's context rows. Which fields depend on which context values is
-         * consumer config.
+         * Restriction is evaluated against the row's conjunctive scope — the conditions guaranteed
+         * to hold whenever the row is relevant — so OR-joined branches never borrow each other's
+         * context rows (expression-coherence availableFields()). Which fields depend on which
+         * context values is consumer config. The currently-selected field is always kept visible so
+         * existing rows stay editable.
          *
-         * The currently-selected field is always kept visible so existing rows stay editable.
+         * @param {Object} row Row view-model.
+         * @returns {Array.<Object>}
          */
         availableFieldsFor: function (row) {
-            var requirements = this.coherence.requirements || {};
-            var self = this;
             var path = this.findPath(row);
             var scope = path
                 ? expressionTree.conjunctiveScope(this._coherenceModelFromVm(this.rootGroup()), path)
                 : null;
 
-            return _.filter(this.fields, function (field) {
-                var requirement = requirements[field.type] || requirements[field.attribute];
-
-                if (!requirement) {
-                    return true;
-                }
-
-                if (row.fieldType() === field.type) {
-                    return true;
-                }
-
-                if (!scope) {
-                    return false;
-                }
-
-                return self._scopeSatisfies(scope, requirement.contexts || []);
-            });
-        },
-
-        /**
-         * True when the scope contains a context condition targeting one of the given values —
-         * `context == value` or `context is one of {…, value, …}`.
-         *
-         * @param {Array.<Object>} scope Condition nodes from the tree module's conjunctiveScope().
-         * @param {Array.<String>} contextValues Accepted context values.
-         * @returns {Boolean}
-         */
-        _scopeSatisfies: function (scope, contextValues) {
-            var contextFieldType = this._contextFieldType();
-            var targets = {};
-
-            if (!contextFieldType) {
-                return false;
-            }
-            _.each(contextValues, function (v) { targets[v] = true; });
-
-            return _.some(scope, function (node) {
-                var condition = node.condition;
-
-                if (condition.fieldType !== contextFieldType) {
-                    return false;
-                }
-
-                if (condition.operator === '==') {
-                    return !!targets[String(condition.value)];
-                }
-
-                if (condition.operator === '()') {
-                    return _.some(expressionValue.asArray(condition.value), function (v) {
-                        return !!targets[String(v)];
-                    });
-                }
-
-                return false;
-            });
+            return expressionCoherence.availableFields(this.fields, this.coherence, scope, row.fieldType());
         },
 
         /**
@@ -1262,33 +1292,48 @@ define([
             return expressionValue.isListOperator(row.operator(), this.operatorsFor(row));
         },
 
+        /**
+         * The row's field value type, `text` without a configured field.
+         *
+         * @param {Object} row Row view-model.
+         * @returns {String}
+         */
         valueTypeFor: function (row) {
-            var field = this.fieldsByType[row.fieldType()];
-            return field ? field.valueType : 'text';
-        },
-
-        valueOptionsFor: function (row) {
-            var field = this.fieldsByType[row.fieldType()];
-            return field ? (field.options || []) : [];
-        },
-
-        attributesFor: function (row) {
-            var field = this.fieldsByType[row.fieldType()];
-            return field ? (field.attributes || []) : [];
+            return expressionFields.valueType(this.fieldsByType[row.fieldType()] || null);
         },
 
         /**
-         * Returns the descriptor for the currently-selected product attribute on a Product Attribute
-         * row, or null. The descriptor contains the EAV input type and (for select/multiselect/boolean
-         * attributes) a predefined option list — drives the autocomplete on the value editor.
+         * The row's field option list.
+         *
+         * @param {Object} row Row view-model.
+         * @returns {Array.<Object>}
+         */
+        valueOptionsFor: function (row) {
+            return expressionFields.valueOptions(this.fieldsByType[row.fieldType()] || null);
+        },
+
+        /**
+         * The row's field attribute descriptors (the picker's attribute list).
+         *
+         * @param {Object} row Row view-model.
+         * @returns {Array.<Object>}
+         */
+        attributesFor: function (row) {
+            return expressionFields.attributes(this.fieldsByType[row.fieldType()] || null);
+        },
+
+        /**
+         * The descriptor of the attribute a Product Attribute row has picked, or null on any other row
+         * (expression-fields pickedAttribute()). It carries the EAV input type and, for an optioned attribute,
+         * the option list that drives the value editor.
+         *
+         * @param {Object} row Row view-model.
+         * @returns {Object|null}
          */
         productAttributeInfo: function (row) {
-            var field = this.fieldsByType[row.fieldType()];
-            if (!field || field.type !== PRODUCT_ATTRIBUTE_PICKER) {
-                return null;
-            }
-            var code = row.productAttribute();
-            return _.findWhere(field.attributes || [], {value: code}) || null;
+            return expressionFields.pickedAttribute(this.fieldsByType[row.fieldType()], function () {
+                return row.productAttribute();
+            });
         },
 
         /**
@@ -1300,6 +1345,9 @@ define([
          * off the one fetch for that attribute code and answers false meanwhile. The version
          * observable is read so every binding that consulted this re-evaluates when a fetch lands;
          * the loading state itself is attributeOptionsPending's to render.
+         *
+         * @param {Object} row Row view-model.
+         * @returns {Boolean}
          */
         productAttributeHasOptions: function (row) {
             var info = this.productAttributeInfo(row);
@@ -1307,17 +1355,14 @@ define([
             this.attributeOptionsVersion();
             this._ensureAttributeOptions(info);
 
-            return !!(info && info.options && info.options.length);
+            return expressionFields.hasLoadedOptions(info);
         },
 
         /**
          * True while the row's attribute is optioned but its list has not arrived yet — the render
          * condition of the loading placeholder, and the guard that keeps the option-less fallback
-         * editors from flashing for the length of one round-trip.
-         *
-         * False without an endpoint (nothing will ever arrive) and false after a failed fetch
-         * (nothing more will): both degrade the row to the fallback editors instead of pinning it
-         * to a placeholder no response will release.
+         * editors from flashing for the length of one round-trip (expression-remote-options
+         * awaitsOptions()).
          *
          * @param {Object} row Row view-model.
          * @returns {Boolean}
@@ -1328,18 +1373,15 @@ define([
             this.attributeOptionsVersion();
             this._ensureAttributeOptions(info);
 
-            if (!info || !info.hasOptions || info.options || this.optionsUrl === '') {
-                return false;
-            }
-
-            return this._optionErrors[String(info.value)] !== true;
+            return expressionRemoteOptions.awaitsOptions(info, this.optionsUrl, this._optionErrors);
         },
 
         /**
          * Starts the one fetch for an attribute descriptor whose option list is declared but not
-         * yet loaded. Guarded three ways: a descriptor with inline or already-loaded options needs
-         * nothing, a code already in flight is not asked twice, and a code that already failed is
-         * not retried — a broken endpoint must cost one request, not one per render.
+         * yet loaded. A code already in flight is not asked twice, and a code that already failed
+         * is not retried — a broken endpoint must cost one request, not one per render. A request
+         * that outlives its deadline is such a failure: the row degrades to the option-less
+         * editors instead of showing its loading placeholder for good.
          *
          * The landed list is written INTO the descriptor — the same object the option accessors
          * and the tree-index cache read — and the version observable is bumped so those accessors
@@ -1351,150 +1393,140 @@ define([
          */
         _ensureAttributeOptions: function (info) {
             var self = this;
-            var code;
-            var sep;
+            var code = expressionRemoteOptions.optionCodeToFetch(info, this.optionsUrl);
 
-            if (!info || info.options || !info.hasOptions || this.optionsUrl === '') {
-                return;
-            }
-            code = String(info.value);
-
-            if (this._optionRequests[code] === true || this._optionErrors[code] === true) {
+            if (!expressionRemoteOptions.needsOptionsRequest(code, this._optionRequests, this._optionErrors)) {
                 return;
             }
             this._optionRequests[code] = true;
-            sep = this.optionsUrl.indexOf('?') === -1 ? '?' : '&';
 
-            window.fetch(this.optionsUrl + sep + 'attribute=' + encodeURIComponent(code), {
-                credentials: 'same-origin',
-                headers: {'X-Requested-With': 'XMLHttpRequest'}
-            })
-                .then(function (r) { return r.ok ? r.json() : null; })
-                .then(function (data) {
-                    if (data && _.isArray(data.options)) {
-                        info.options = data.options;
+            this._requestJson(
+                'options:' + code,
+                expressionRemoteOptions.optionsRequestUrl(this.optionsUrl, code),
+                {},
+                function (data) {
+                    var options = expressionRemoteOptions.readOptions(data);
+
+                    if (options !== null) {
+                        info.options = options;
                     } else {
                         self._optionErrors[code] = true;
                     }
-                })
-                .catch(function () { self._optionErrors[code] = true; })
-                .then(function () {
                     delete self._optionRequests[code];
                     self.attributeOptionsVersion(self.attributeOptionsVersion() + 1);
-                });
+                }
+            );
         },
 
         /**
-         * Returns the option list for the row's product attribute, plus filtering by row.searchText.
-         * Mirrors filteredOptionsFor() — same {items, capped} contract, same cap — but reads from
-         * the per-attribute options instead of field.options.
+         * Returns the option list for the row's product attribute, filtered by row.searchText —
+         * the same {items, capped} contract and cap as filteredOptionsFor(), over the picked
+         * attribute's own options. Only a list-valued row leaves out what it already holds.
          *
          * @param {Object} row Row view-model.
          * @returns {{items: Array.<Object>, capped: Boolean}}
          */
         filteredProductAttributeOptions: function (row) {
+            var self = this;
             var info = this.productAttributeInfo(row);
-            if (!info || !info.options) return {items: [], capped: false};
 
-            var search = (row.searchText() || '').toLowerCase().trim();
-            var multi = this.rowUsesListOperator(row);
-            var selected = multi ? expressionValue.asArray(row.value()) : [];
-            var selectedSet = {};
-            var found;
-            _.each(selected, function (v) { selectedSet[String(v)] = true; });
-
-            // Hierarchical attribute options (the category picker) search by breadcrumb path,
-            // exactly like the dedicated hierarchical fields.
-            if (search && this.treeModeFor(row)) {
-                found = expressionOptions.pathSearch(this._treeIndexFor(row), search, this.optionMatchCap);
-
-                return {
-                    items: _.filter(found.items, function (opt) {
-                        return !(multi && selectedSet[String(opt.value)]);
-                    }),
-                    capped: found.capped
-                };
+            if (!info || !info.options) {
+                return {items: [], capped: false};
             }
 
-            var matches = _.filter(info.options, function (opt) {
-                if (multi && selectedSet[String(opt.value)]) return false;
-                if (!search) return true;
-                return String(opt.label).toLowerCase().indexOf(search) !== -1;
-            });
-
-            return {items: matches.slice(0, this.optionMatchCap), capped: matches.length > this.optionMatchCap};
+            return expressionOptions.offerOptions(
+                info.options,
+                expressionListValue.offerExclusions(
+                    function () {
+                        return self.rowUsesListOperator(row);
+                    },
+                    function () {
+                        return expressionValue.asArray(row.value());
+                    }
+                ),
+                row.searchText(),
+                this.optionMatchCap,
+                function () {
+                    return self._searchIndexFor(row);
+                }
+            );
         },
 
         /**
          * Selected option objects for a Product Attribute row using the `()` / `!()` operator.
+         *
+         * @param {Object} row Row view-model.
+         * @returns {Array.<Object>}
          */
         selectedProductAttributeOptions: function (row) {
             var info = this.productAttributeInfo(row);
-            if (!info || !info.options) return [];
-            var selected = expressionValue.asArray(row.value());
-            var selectedSet = {};
-            _.each(selected, function (v) { selectedSet[String(v)] = true; });
-            return _.filter(info.options, function (opt) {
-                return selectedSet[String(opt.value)];
-            });
+
+            if (!info || !info.options) {
+                return [];
+            }
+
+            return expressionOptions.selectedOptions(info.options, expressionValue.asArray(row.value()));
         },
 
         /**
          * True for Product Attribute rows whose attribute (e.g. `sku`, `name`) is in the AJAX-suggest
          * whitelist on the backend — drives the type-ahead suggestion dropdown.
+         *
+         * @param {Object} row Row view-model.
+         * @returns {Boolean}
          */
         productAttributeSupportsSuggest: function (row) {
-            var info = this.productAttributeInfo(row);
-            return !!(info && info.suggest);
+            return expressionFields.supportsSuggest(this.productAttributeInfo(row));
         },
 
         /**
-         * Name of the row's scalar value type, or null when the row is not in a scalar context:
-         * a multi-valued operator, or an attribute with a predefined option list — those keep
-         * their pickers. Product Attribute rows resolve their selected attribute's descriptor;
-         * every other row resolves its field descriptor, where an explicit `scalarType` key
-         * selects the default advisory validator (the editor itself stays the field's
-         * valueType editor). The value module's resolution handles unknown descriptors — they
-         * read as plain text, never as a blank editor.
+         * Name of the row's scalar value type, or null when the row is not in a scalar context
+         * (expression-value scalarTypeName()). Product Attribute rows resolve their selected attribute's
+         * descriptor, every other row its field descriptor (expression-fields scalarDescriptor()).
          *
          * @param {Object} row Row view-model.
          * @returns {String|null} Value-type name, or null outside scalar contexts.
          */
         scalarTypeNameFor: function (row) {
-            var field;
+            var self = this;
 
-            if (this.productAttributeHasOptions(row) || this.rowUsesListOperator(row)) {
-                return null;
-            }
-            field = this.fieldsByType[row.fieldType()];
-
-            if (field && field.valueType === 'product-attribute') {
-                return expressionValue.scalarTypeFor(this.productAttributeInfo(row));
-            }
-
-            return expressionValue.scalarTypeFor(field || null);
+            return expressionValue.scalarTypeName({
+                hasOptions: function () {
+                    return self.productAttributeHasOptions(row);
+                },
+                usesListOperator: function () {
+                    return self.rowUsesListOperator(row);
+                },
+                descriptor: function () {
+                    return expressionFields.scalarDescriptor(self.fieldsByType[row.fieldType()] || null, function () {
+                        return self.productAttributeInfo(row);
+                    });
+                }
+            });
         },
 
         /**
-         * True when the row's value area renders the generic scalar editor — one branch for every
-         * scalar type, native input attributes supplied by the type's registry entry. Plain text
-         * counts as a scalar type: for it the generic editor IS the free-text input. The one
-         * yield: a text-typed attribute whose backend supports suggestions keeps the type-ahead
-         * editor instead — only typed scalars (number, date, …) take precedence over suggestions.
+         * True when the row's value area renders the generic scalar editor — one branch for every scalar
+         * type, native input attributes supplied by the type's registry entry (expression-value
+         * usesScalarEditor()).
          *
          * @param {Object} row Row view-model.
          * @returns {Boolean}
          */
         rowUsesScalarEditor: function (row) {
-            var name = this.scalarTypeNameFor(row);
+            var self = this;
 
-            // A row whose option list is still on its way renders the loading placeholder, not a
-            // scalar editor the arriving list would immediately replace.
-            if (name === null || this.attributeOptionsPending(row)) {
-                return false;
-            }
-
-            return name !== 'text' || !this.productAttributeSupportsSuggest(row);
+            return expressionValue.usesScalarEditor({
+                typeName: function () {
+                    return self.scalarTypeNameFor(row);
+                },
+                optionsPending: function () {
+                    return self.attributeOptionsPending(row);
+                },
+                supportsSuggest: function () {
+                    return self.productAttributeSupportsSuggest(row);
+                }
+            });
         },
 
         /**
@@ -1511,17 +1543,17 @@ define([
          * @returns {Object} Attribute name → value map.
          */
         scalarInputAttrs: function (row) {
-            var name = this.scalarTypeNameFor(row) || 'text';
+            var shape = expressionValue.scalarEditorShape(this.scalarTypeNameFor(row));
             var attrs = {
-                'class': name === 'text' ? 'ufe-expr__input' : 'ufe-expr__input ufe-expr__input--typed',
+                'class': shape.freeText ? 'ufe-expr__input' : 'ufe-expr__input ufe-expr__input--typed',
                 'aria-label': this.valueEditorLabel()
             };
 
-            if (name === 'text') {
+            if (shape.freeText) {
                 attrs.placeholder = this.valuePlaceholder();
             }
 
-            return _.extend(attrs, expressionValue.valueTypeDef(name).attrs);
+            return _.extend(attrs, expressionValue.valueTypeDef(shape.type).attrs);
         },
 
         /**
@@ -1535,14 +1567,7 @@ define([
          * @returns {String}
          */
         scalarEditValue: function (row) {
-            var def = expressionValue.valueTypeDef(this.scalarTypeNameFor(row));
-            var raw = row.value();
-
-            if (def.editValue) {
-                return def.editValue(raw);
-            }
-
-            return raw === null || raw === undefined ? '' : String(raw);
+            return expressionValue.editValueOf(this.scalarTypeNameFor(row), row.value());
         },
 
         /**
@@ -1556,103 +1581,74 @@ define([
          * @returns {void}
          */
         commitScalarValue: function (row, event) {
-            var def = expressionValue.valueTypeDef(this.scalarTypeNameFor(row));
-            var input = event && event.target ? event.target.value : '';
+            var name = this.scalarTypeNameFor(row);
 
-            row.value(def.commitValue ? def.commitValue(input) : input);
+            row.value(expressionValue.commitValueOf(name, event && event.target ? event.target.value : ''));
         },
 
         /**
-         * Advisory validation message for the row's current value, or '' when the value passes or
-         * nothing validates it.
+         * Advisory validation message for the row's current value, or the empty-value nudge, or ''.
          *
-         * Validator resolution: the selected operator's descriptor entry may carry a `validate`
-         * key naming one of the registered validators; an operator naming none falls back to the
-         * row's scalar value type's default `validator` (integer, float and email carry one —
-         * text, date and time do not), and rows outside a scalar context validate only through an
-         * operator's explicit key. Format validators pass blank input by design — presence is
-         * `not-empty`'s job — so a pristine row shows nothing until non-blank input arrives. An
-         * operator naming an unregistered validator validates nothing and shows no error — stale
-         * consumer configs degrade silently instead of breaking the editor.
-         *
-         * Message resolution on failure: the operator entry's pre-translated `validateMessage`
-         * wins; else the component's built-in per-validator message; else the generic fallback.
+         * Which validator applies is the value module's resolution (expression-value
+         * failingValidator()). On failure the operator entry's own pre-translated
+         * `validateMessage` wins, else the component's message for that validator, else the
+         * generic one. Format validators pass blank input by design, so a row no validator faults
+         * but whose value is still EMPTY answers with the completion nudge — a consumer wiring
+         * `not-empty` still outranks it.
          *
          * Advisory is the load-bearing word: the autosave computed still serialises invalid
          * values — the admin may be mid-typing — so this only renders a hint under the value
-         * editor and never gates the save. Plain method, computed-friendly: it reads the row's
-         * observables, so any binding evaluating it re-renders on edits.
-         *
-         * A row that no validator faults but whose value is still EMPTY answers with the built-in
-         * completion nudge instead of '' — see _emptyValueHint. A consumer wiring `not-empty`
-         * still outranks it: an empty value fails that validator before the nudge is consulted.
+         * editor and never gates the save.
          *
          * @param {Object} row Row view-model.
          * @returns {String} Error text, or ''.
          */
         rowValueError: function (row) {
-            var entry = _.findWhere(this.operatorsFor(row), {value: row.operator()});
-            var name = entry && entry.validate ? entry.validate : null;
-            var typeName;
-            var predicate;
+            var self = this;
+            var failure = expressionValue.failingValidator(
+                expressionFields.operatorEntry(this.operatorsFor(row), row.operator()),
+                function () {
+                    return self.scalarTypeNameFor(row);
+                },
+                row.value()
+            );
 
-            if (!name) {
-                typeName = this.scalarTypeNameFor(row);
-                name = typeName === null ? null : expressionValue.valueTypeDef(typeName).validator || null;
-            }
-            predicate = name ? expressionValue.validators[name] : null;
-
-            if (!predicate || predicate(row.value())) {
+            if (failure === null) {
                 return this._emptyValueHint(row);
             }
 
-            if (entry && entry.validateMessage) {
-                return entry.validateMessage;
-            }
-
-            return VALIDATOR_MESSAGES[name] || $t('Invalid value');
+            return failure.message || VALIDATOR_MESSAGES[failure.name] || $t('Invalid value');
         },
 
         /**
-         * The built-in nudge under a value editor with nothing in it, or '' once a value exists.
-         *
-         * Not a validator and not a gate: an empty row still serialises like any other — what an
-         * empty condition means is the consuming rule engine's question — but a just-added row
-         * otherwise looks finished while it matches nothing the admin intended yet. Shaped by the
-         * editor: list-valued editors take several values, everything else takes one.
+         * The built-in nudge under a value editor with nothing in it, or '' once a value exists — shaped by
+         * what the editor still needs (expression-value emptyValueNeeds()). Not a validator and not a gate: an
+         * empty row still serialises like any other.
          *
          * @param {Object} row Row view-model.
          * @returns {String}
          */
         _emptyValueHint: function (row) {
-            if (!this._rowValueIsEmpty(row)) {
-                return '';
-            }
+            var self = this;
 
-            return this.rowUsesListOperator(row) || this.valueTypeFor(row) === 'multiselect'
-                ? $t('Pick at least one value to complete this condition.')
-                : $t('Enter a value to complete this condition.');
+            return EMPTY_VALUE_HINTS[expressionValue.emptyValueNeeds({
+                value: function () {
+                    return row.value();
+                },
+                usesListOperator: function () {
+                    return self.rowUsesListOperator(row);
+                },
+                valueType: function () {
+                    return self.valueTypeFor(row);
+                }
+            })];
         },
 
         /**
-         * True when the row's stored value is empty: an empty list, or blank text.
+         * The row's value read as a list, so templates can render the multi-value pill list.
          *
          * @param {Object} row Row view-model.
-         * @returns {Boolean}
-         */
-        _rowValueIsEmpty: function (row) {
-            var value = row.value();
-
-            if (_.isArray(value)) {
-                return value.length === 0;
-            }
-
-            return value === null || value === undefined || String(value).trim() === '';
-        },
-
-        /**
-         * Public wrapper around the tree module's asArray so templates can read the multi-value
-         * pill list off row.value().
+         * @returns {Array}
          */
         valueAsArray: function (row) {
             return expressionValue.asArray(row.value());
@@ -1662,9 +1658,14 @@ define([
          * Debounced AJAX request to the suggest endpoint. The `query` arg is what the user typed; for
          * single-value rows that's row.value(), for multi-value rows it's row.searchText(). The idle
          * time is the configured suggest debounce.
+         *
+         * @param {Object} row Row view-model.
+         * @param {*} query The typed text.
+         * @returns {void}
          */
         fetchSuggestionsDebounced: function (row, query) {
             var self = this;
+
             if (row._suggestTimer) {
                 clearTimeout(row._suggestTimer);
             }
@@ -1673,38 +1674,41 @@ define([
             }, this.suggestDebounce);
         },
 
+        /**
+         * Asks the suggest endpoint about one query, or empties the suggestions when there is
+         * nothing to ask (expression-remote-options suggestRequestUrl()).
+         *
+         * A row has one suggest request at a time: a newer query aborts the one in flight, and so
+         * does a query that asks nothing, so a slow answer to what the admin typed before can never
+         * replace the list for what they typed since. Every failure — a refused or unreadable
+         * answer, the deadline — empties the list, as no suggestions at all.
+         *
+         * @param {Object} row Row view-model.
+         * @param {*} query The typed text.
+         * @returns {void}
+         */
         _fetchSuggestions: function (row, query) {
             var self = this;
-            var info = this.productAttributeInfo(row);
-            if (!info || !info.suggest) {
-                this._setSuggestions(row, []);
-                return;
-            }
-            var q = String(query == null ? '' : query).trim();
-            if (q.length < this.suggestMinQuery) {
-                this._setSuggestions(row, []);
-                return;
-            }
+            var url = expressionRemoteOptions.suggestRequestUrl(
+                this.productAttributeInfo(row),
+                row.productAttribute(),
+                query,
+                this.suggestMinQuery,
+                this.suggestUrl
+            );
 
-            var url = this.suggestUrl;
-            if (!url) {
+            if (url === null) {
+                this._requests.cancel('suggest:' + row.id);
                 this._setSuggestions(row, []);
+                row.suggestLoading(false);
+
                 return;
             }
-            var sep = url.indexOf('?') === -1 ? '?' : '&';
-            var fullUrl = url + sep
-                + 'attribute=' + encodeURIComponent(row.productAttribute())
-                + '&q=' + encodeURIComponent(q);
-
             row.suggestLoading(true);
-            window.fetch(fullUrl, {
-                credentials: 'same-origin',
-                headers: {'X-Requested-With': 'XMLHttpRequest'}
-            })
-                .then(function (r) { return r.ok ? r.json() : {items: []}; })
-                .then(function (data) { self._setSuggestions(row, data && data.items ? data.items : []); })
-                .catch(function () { self._setSuggestions(row, []); })
-                .then(function () { row.suggestLoading(false); });
+            this._requestJson('suggest:' + row.id, url, {}, function (data) {
+                self._setSuggestions(row, expressionRemoteOptions.readSuggestions(data));
+                row.suggestLoading(false);
+            });
         },
 
         /**
@@ -1726,9 +1730,7 @@ define([
 
         /**
          * True when the type-ahead dropdown has something to say: results, the loading row, or the
-         * "no matches" verdict. Without this gate an open dropdown with nothing in it would render
-         * as an empty bordered box hanging under the input — which is exactly what a short query
-         * (below the request threshold) produces, since nothing was ever requested for it.
+         * "no matches" verdict (expression-remote-options suggestListHasContent()).
          *
          * @param {Object} row Row view-model.
          * @param {*} query The text the suggestions were requested for — the row's value on a
@@ -1736,125 +1738,113 @@ define([
          * @returns {Boolean}
          */
         suggestDropdownVisible: function (row, query) {
-            return row.dropdownOpen()
-                && (row.suggestLoading() || row.suggestedOptions().length > 0 || this.suggestNoMatches(row, query));
+            var self = this;
+
+            return expressionRemoteOptions.suggestListHasContent({
+                isOpen: function () {
+                    return row.dropdownOpen();
+                },
+                loading: function () {
+                    return row.suggestLoading();
+                },
+                count: function () {
+                    return row.suggestedOptions().length;
+                },
+                answeredEmpty: function () {
+                    return self.suggestNoMatches(row, query);
+                }
+            });
         },
 
         /**
-         * True when the suggest endpoint has answered a real query with nothing.
-         *
-         * All three conditions are load-bearing: while a request is in flight the answer is not in
-         * yet, previous results still on screen are not "no matches", and a query below the request
-         * threshold was never asked at all — reporting "no matches" for any of those would state
-         * something the component does not know.
+         * True when the suggest endpoint has answered a real query with nothing
+         * (expression-remote-options answeredEmpty()).
          *
          * @param {Object} row Row view-model.
          * @param {*} query The text the suggestions were requested for.
          * @returns {Boolean}
          */
         suggestNoMatches: function (row, query) {
-            var q = String(query === null || query === undefined ? '' : query).trim();
-
-            return !row.suggestLoading()
-                && row.suggestedOptions().length === 0
-                && q.length >= this.suggestMinQuery;
+            return expressionRemoteOptions.answeredEmpty(
+                row.suggestLoading(),
+                row.suggestedOptions().length,
+                query,
+                this.suggestMinQuery
+            );
         },
 
         /**
-         * Commits the current free-text input as a multi-value pill (Enter key or blur fallback).
+         * Commits the current free-text input as a multi-value pill (Enter key or blur fallback), trimmed,
+         * and nothing for blank input (expression-list-value freeTextEntry()).
+         *
+         * @param {Object} row Row view-model.
+         * @returns {void}
          */
         commitFreeTextValue: function (row) {
-            var text = String(row.searchText() || '').trim();
-            if (text === '') return;
-            this.addOption(row, text);
+            var entry = expressionListValue.freeTextEntry(row.searchText());
+
+            if (entry !== null) {
+                this.addOption(row, entry);
+            }
         },
 
+        /**
+         * The row's field placeholder — consumer wording — or ''.
+         *
+         * @param {Object} row Row view-model.
+         * @returns {String}
+         */
         placeholderFor: function (row) {
-            var field = this.fieldsByType[row.fieldType()];
-            return field && field.placeholder ? field.placeholder : '';
+            return expressionFields.placeholder(this.fieldsByType[row.fieldType()] || null);
         },
 
         /**
          * The unit the row's value is entered in — rendered beside the editor so a bare number
-         * says what it counts. On a Product Attribute row the selected attribute's descriptor
-         * answers (only the attribute knows whether its number is a price or a weight); every
-         * other row reads its field descriptor's `unit`. '' when neither declares one, which is
-         * also the render condition — no unit, no element.
-         *
-         * The text arrives from the consumer's PHP (a currency code, a weight unit) and is bound
-         * as it came: codes are not translated.
+         * says what it counts — or '', which is also the render condition (expression-fields
+         * unit()). The text is a code from the consumer and is bound as it came.
          *
          * @param {Object} row Row view-model.
          * @returns {String}
          */
         rowUnit: function (row) {
-            var descriptor = this.fieldsByType[row.fieldType()];
+            var self = this;
 
-            if (!descriptor) {
-                return '';
-            }
-
-            if (this.valueTypeFor(row) === 'product-attribute') {
-                descriptor = this.productAttributeInfo(row);
-            }
-
-            return descriptor && descriptor.unit ? String(descriptor.unit) : '';
-        },
-
-        /**
-         * Multi-value autocomplete helpers (selected pills + filtered dropdown).
-         */
-        selectedOptionsFor: function (row) {
-            var allOptions = this.valueOptionsFor(row);
-            var selected = expressionValue.asArray(row.value());
-            var selectedSet = {};
-            _.each(selected, function (v) { selectedSet[String(v)] = true; });
-            return _.filter(allOptions, function (opt) {
-                return selectedSet[String(opt.value)];
+            return expressionFields.unit(this.fieldsByType[row.fieldType()] || null, function () {
+                return self.productAttributeInfo(row);
             });
         },
 
         /**
-         * The row's selectable options, filtered by row.searchText and capped, plus whether the
-         * cap truncated the result — the dropdown appends its "keep typing" hint off that flag.
+         * The options a list-valued select row holds, as option objects, in option-list order.
          *
-         * `capped` means the search STOPPED at the cap, not that a known number of matches is
-         * hidden: in the breadcrumb-search branch the cap applies to the walk, before
-         * already-selected values are dropped from the offer, so the returned list can be shorter
-         * than the cap while the search was still truncated. optionCapHint() is worded to stay
-         * true under both branches.
+         * @param {Object} row Row view-model.
+         * @returns {Array.<Object>}
+         */
+        selectedOptionsFor: function (row) {
+            return expressionOptions.selectedOptions(this.valueOptionsFor(row), expressionValue.asArray(row.value()));
+        },
+
+        /**
+         * The row's selectable options, filtered by row.searchText and capped, plus whether the
+         * cap truncated the result — the dropdown appends its "keep typing" hint off that flag
+         * (expression-options offerOptions()). Values already selected are never offered, and a
+         * hierarchy searches by breadcrumb path.
          *
          * @param {Object} row Row view-model.
          * @returns {{items: Array.<Object>, capped: Boolean}}
          */
         filteredOptionsFor: function (row) {
-            var allOptions = this.valueOptionsFor(row);
-            var searchText = (row.searchText() || '').toLowerCase().trim();
-            var selected = expressionValue.asArray(row.value());
-            var selectedSet = {};
-            var found;
-            _.each(selected, function (v) { selectedSet[String(v)] = true; });
+            var self = this;
 
-            // Hierarchical option lists search by breadcrumb path, so an ambiguous leaf name
-            // ("Internal Hard Drives" exists under several parents) narrows by naming ancestors.
-            if (searchText && this.treeModeFor(row)) {
-                found = expressionOptions.pathSearch(this._treeIndexFor(row), searchText, this.optionMatchCap);
-
-                return {
-                    items: _.filter(found.items, function (opt) {
-                        return !selectedSet[String(opt.value)];
-                    }),
-                    capped: found.capped
-                };
-            }
-
-            var matches = _.filter(allOptions, function (opt) {
-                if (selectedSet[String(opt.value)]) return false;
-                if (!searchText) return true;
-                return String(opt.label).toLowerCase().indexOf(searchText) !== -1;
-            });
-
-            return {items: matches.slice(0, this.optionMatchCap), capped: matches.length > this.optionMatchCap};
+            return expressionOptions.offerOptions(
+                this.valueOptionsFor(row),
+                expressionValue.asArray(row.value()),
+                row.searchText(),
+                this.optionMatchCap,
+                function () {
+                    return self._searchIndexFor(row);
+                }
+            );
         },
 
         /**
@@ -1876,88 +1866,113 @@ define([
 
         /**
          * True when an option list is long enough that a native `<select>` stops being usable and the
-         * searchable combobox takes over. Read through the sanitised tunable, so a form's XML can
-         * retune the threshold without touching this file.
+         * searchable combobox takes over (expression-fields isLargeOptionList()). Read through the
+         * sanitised tunable, so a form's XML can retune the threshold without touching this file.
          *
          * @param {Array} options Option list.
          * @returns {Boolean}
          */
         optionListIsLarge: function (options) {
-            return (_.isArray(options) ? options.length : 0) > this.searchableSelectThreshold;
+            return expressionFields.isLargeOptionList(options, this.searchableSelectThreshold);
         },
 
         /**
-         * True when the row's value is one option out of a `select` field's list — the case a
-         * `<select>` covers, as opposed to the membership operators, which take several.
+         * Which single-select a `select` field's value editor is: the plain `<select>` for a list
+         * short enough to scan, the searchable combobox above the threshold, or none when the row
+         * does not pick one option out of the field's list (expression-fields singleSelectEditor()).
          *
          * @param {Object} row Row view-model.
-         * @returns {Boolean}
+         * @returns {('plain'|'searchable'|null)}
          */
-        _rowPicksOneOption: function (row) {
-            return this.valueTypeFor(row) === 'select' && !this.rowUsesListOperator(row);
+        _valueSelectEditor: function (row) {
+            var self = this;
+
+            return expressionFields.singleSelectEditor({
+                picksOne: function () {
+                    return expressionFields.picksOneFieldOption({
+                        valueType: function () {
+                            return self.valueTypeFor(row);
+                        },
+                        usesListOperator: function () {
+                            return self.rowUsesListOperator(row);
+                        }
+                    });
+                },
+                options: function () {
+                    return self.valueOptionsFor(row);
+                }
+            }, this.searchableSelectThreshold);
         },
 
         /**
-         * True when the row's value editor is the plain `<select>`: one option out of a list short
-         * enough to scan. The plain control is the better one wherever it still works — one keystroke
-         * opens it and the browser owns its keyboard behaviour — so it stays the default and the
-         * combobox is what a long list escalates to.
+         * The same question for an optioned attribute's single value on a picker row, judged per
+         * selected attribute — a three-option colour keeps the native control while a brand list
+         * escalates.
+         *
+         * @param {Object} row Row view-model.
+         * @returns {('plain'|'searchable'|null)}
+         */
+        _attributeValueSelectEditor: function (row) {
+            var self = this;
+
+            return expressionFields.singleSelectEditor({
+                picksOne: function () {
+                    return expressionFields.picksOneAttributeOption({
+                        valueType: function () {
+                            return self.valueTypeFor(row);
+                        },
+                        hasOptions: function () {
+                            return self.productAttributeHasOptions(row);
+                        },
+                        usesListOperator: function () {
+                            return self.rowUsesListOperator(row);
+                        }
+                    });
+                },
+                options: function () {
+                    return self.productAttributeInfo(row).options;
+                }
+            }, this.searchableSelectThreshold);
+        },
+
+        /**
+         * True when the row's value editor is the plain `<select>`.
          *
          * @param {Object} row Row view-model.
          * @returns {Boolean}
          */
         rowUsesPlainValueSelect: function (row) {
-            return this._rowPicksOneOption(row) && !this.optionListIsLarge(this.valueOptionsFor(row));
+            return this._valueSelectEditor(row) === 'plain';
         },
 
         /**
-         * True when the row's value editor is the searchable combobox: one option out of a list too
-         * long to scan.
+         * True when the row's value editor is the searchable combobox.
          *
          * @param {Object} row Row view-model.
          * @returns {Boolean}
          */
         rowUsesSearchableValueSelect: function (row) {
-            return this._rowPicksOneOption(row) && this.optionListIsLarge(this.valueOptionsFor(row));
+            return this._valueSelectEditor(row) === 'searchable';
         },
 
         /**
-         * True when the row's value is one option out of an optioned attribute's list — the
-         * picker-side counterpart of _rowPicksOneOption, over the SELECTED ATTRIBUTE's options
-         * rather than a field's.
-         *
-         * @param {Object} row Row view-model.
-         * @returns {Boolean}
-         */
-        _rowPicksOneAttributeOption: function (row) {
-            return this.valueTypeFor(row) === 'product-attribute'
-                && this.productAttributeHasOptions(row)
-                && !this.rowUsesListOperator(row);
-        },
-
-        /**
-         * True when an optioned attribute's single-value editor is the plain `<select>`: the same
-         * threshold rule a select field's value follows, judged per selected attribute — a
-         * three-option colour keeps the native control while a brand list escalates.
+         * True when an optioned attribute's single-value editor is the plain `<select>`.
          *
          * @param {Object} row Row view-model.
          * @returns {Boolean}
          */
         rowUsesPlainAttributeValueSelect: function (row) {
-            return this._rowPicksOneAttributeOption(row)
-                && !this.optionListIsLarge(this.productAttributeInfo(row).options);
+            return this._attributeValueSelectEditor(row) === 'plain';
         },
 
         /**
-         * True when an optioned attribute's single-value editor is the searchable combobox: one
-         * option out of a list too long to scan.
+         * True when an optioned attribute's single-value editor is the searchable combobox.
          *
          * @param {Object} row Row view-model.
          * @returns {Boolean}
          */
         rowUsesSearchableAttributeValueSelect: function (row) {
-            return this._rowPicksOneAttributeOption(row)
-                && this.optionListIsLarge(this.productAttributeInfo(row).options);
+            return this._attributeValueSelectEditor(row) === 'searchable';
         },
 
         /**
@@ -2010,16 +2025,14 @@ define([
             if (definition === null) {
                 return null;
             }
-            selected = String(definition.selected(this, row));
+            selected = definition.selected(this, row);
 
-            return _.find(this.searchableSelectOptions(row, control), function (option) {
-                return String(option.value) === selected;
-            }) || null;
+            return expressionOptions.findOption(this.searchableSelectOptions(row, control), selected);
         },
 
         /**
          * What the control's input SHOWS: the chosen option's label while the list is closed, the
-         * query while it is open.
+         * query while it is open (expression-listbox closedComboText()).
          *
          * The label rather than the code, because the label is what the admin reads — and it is the
          * input's value, not a decoration beside it, so a screen reader announces the choice like a
@@ -2035,36 +2048,37 @@ define([
          * @returns {String}
          */
         searchableSelectDisplay: function (row, control) {
+            var self = this;
             var definition = searchableSelect(control);
-            var option;
-            var selected;
 
             if (definition === null) {
                 return '';
             }
 
-            if (row.dropdownOpen() && row.dropdownControl() === control) {
-                return String(row.comboQuery() || '');
-            }
-            option = this.searchableSelectedOption(row, control);
-
-            if (option !== null) {
-                return this.displayLabel(option.label);
-            }
-            selected = definition.selected(this, row);
-
-            return selected === null || selected === undefined ? '' : String(selected);
+            return expressionListbox.closedComboText({
+                isOpenHere: function () {
+                    return self._comboOpenOn(row, control);
+                },
+                query: function () {
+                    return row.comboQuery();
+                },
+                option: function () {
+                    return self.searchableSelectedOption(row, control);
+                },
+                selected: function () {
+                    return definition.selected(self, row);
+                }
+            });
         },
 
         /**
          * The chosen option's CODE, as the closed control's secondary text — and '' while the list is
-         * open, where the query owns the input and every entry carries its own code.
+         * open, where the query owns the input and every entry carries its own code
+         * (expression-listbox closedComboCode()).
          *
          * This is the whole point of the control on a list whose labels repeat: four attributes
          * labelled the same are told apart by their code and by nothing else, so the code is part of
          * what the closed control has to say rather than something the admin opens the list to check.
-         * A code equal to its own label adds nothing and is left out — many option lists are keyed by
-         * the label itself.
          *
          * The element holding it is rendered even when this is '' (see the markup), so the input's
          * description reference never points at nothing.
@@ -2074,14 +2088,27 @@ define([
          * @returns {String}
          */
         searchableSelectCode: function (row, control) {
-            var option;
+            var self = this;
 
-            if (row.dropdownOpen() && row.dropdownControl() === control) {
-                return '';
-            }
-            option = this.searchableSelectedOption(row, control);
+            return expressionListbox.closedComboCode({
+                isOpenHere: function () {
+                    return self._comboOpenOn(row, control);
+                },
+                option: function () {
+                    return self.searchableSelectedOption(row, control);
+                }
+            });
+        },
 
-            return option === null ? '' : this.optionCode(option);
+        /**
+         * True while the row's dropdown is open on this combobox.
+         *
+         * @param {Object} row Row view-model.
+         * @param {String} control Control name of the searchable select.
+         * @returns {Boolean}
+         */
+        _comboOpenOn: function (row, control) {
+            return row.dropdownOpen() && row.dropdownControl() === control;
         },
 
         /**
@@ -2092,11 +2119,7 @@ define([
          * @returns {String}
          */
         optionCode: function (option) {
-            var code = option.value === null || option.value === undefined ? '' : String(option.value);
-
-            return code === String(option.label === null || option.label === undefined ? '' : option.label)
-                ? ''
-                : code;
+            return expressionOptions.optionCode(option);
         },
 
         /**
@@ -2185,7 +2208,7 @@ define([
          * untouched — suppressing it would suppress the caret placement it carries.
          *
          * Bound as a click, not a mousedown: the mousedown contract belongs to the dropdown
-         * focus guard alone (one guard per list, pinned by the unit suite).
+         * focus guard alone, one guard per list.
          *
          * @param {Event} event Click event on the combo container.
          * @returns {Boolean} True to let the browser handle a click on the input itself.
@@ -2208,157 +2231,57 @@ define([
 
         /**
          * True when the row's active option list is hierarchy-annotated — its entries carry a
-         * `level` key. Detected on the first entry: the option providers annotate all entries or
-         * none. Flat lists (no `level`) keep the plain filtered-list behaviour everywhere.
-         *
-         * The active list is the one the row's value editor renders: the field's own options,
-         * or the selected product attribute's options on a Product Attribute row.
+         * `level` key (expression-fields hasHierarchy()). Flat lists keep the plain filtered-list
+         * behaviour everywhere. The active list is the one the row's value editor renders: the
+         * field's own options, or the selected product attribute's options on a Product Attribute
+         * row.
          *
          * @param {Object} row Row view-model.
          * @returns {Boolean}
          */
         treeModeFor: function (row) {
-            var host = this._activeOptionsHostFor(row);
-            var options = host && host.options || [];
-
-            return options.length > 0 && options[0].level !== undefined;
+            return expressionFields.hasHierarchy(this._activeOptionsHostFor(row));
         },
 
         /**
-         * True when the row's dropdown renders the collapsible tree: hierarchy-annotated options
-         * and no search text. Typing switches the dropdown to the flat filtered list (with
-         * breadcrumb labels); clearing the search returns to the tree.
-         *
-         * A dropdown belonging to a searchable single-select is never the tree, whatever the row's
-         * VALUE options look like. Without that the Attribute control of a row whose value editor is
-         * a category tree would inherit the tree's whole key pattern — Space would toggle a category
-         * instead of the highlighted attribute — because both controls share the row's dropdown
-         * state.
+         * True when the row's dropdown renders the collapsible tree (expression-listbox rowShowsTree()):
+         * hierarchy-annotated options, no search text, and a list that belongs to the value editor rather
+         * than to a searchable single-select.
          *
          * @param {Object} row Row view-model.
          * @returns {Boolean}
          */
         rowShowsTree: function (row) {
-            return searchableSelect(row.dropdownControl()) === null
-                && this.treeModeFor(row)
-                && (row.searchText() || '').trim() === '';
+            var self = this;
+
+            return expressionListbox.rowShowsTree({
+                isSearchableSelect: function () {
+                    return searchableSelect(row.dropdownControl()) !== null;
+                },
+                hasHierarchy: function () {
+                    return self.treeModeFor(row);
+                },
+                searchText: function () {
+                    return row.searchText();
+                }
+            });
         },
 
         /**
-         * Flattens the row's option tree into the list of currently-visible nodes, depth-first:
-         * top-level nodes always, a node's children only while the node is expanded. Each entry
-         * wraps one option with the presentation state the template renders directly:
-         * {value, label, level, indent, hasChildren, expanded, selected, mixed, selectedInside,
-         * descendants}.
-         *
-         * Selected options stay visible and stay clickable — the row toggles both ways, and hiding
-         * a selected node would break the tree shape for its descendants anyway. Reads the row's
-         * expandedNodes and value observables, so any binding evaluating this re-renders on
-         * expansion and on selection.
-         *
-         * `mixed` is the checkbox's third state: the node itself is not selected, but at least one
-         * entry below it is. It comes from ONE upward pass over the stored value (see
-         * _selectedAncestorCounts) rather than from a downward walk per node, so the whole render
-         * costs the number of selected values times the tree depth — nothing here scales with the
-         * option count, which on this kind of list is the only cost that would matter.
+         * The row's option tree flattened into the currently-visible nodes, each carrying the
+         * presentation state the template renders (expression-option-tree visibleNodes()). Reads
+         * the row's expandedNodes and value observables, so any binding evaluating this re-renders
+         * on expansion and on selection.
          *
          * @param {Object} row Row view-model.
          * @returns {Array.<Object>}
          */
         visibleTreeNodes: function (row) {
-            var index;
-            var expanded;
-            var selected;
-            var selectedSet = Object.create(null);
-            var insideCounts;
-            var nodes = [];
-            var visit;
+            var index = this._searchIndexFor(row);
 
-            if (!this.treeModeFor(row)) {
-                return nodes;
-            }
-            index = this._treeIndexFor(row);
-            expanded = row.expandedNodes();
-            selected = expressionValue.asArray(row.value());
-            _.each(selected, function (v) { selectedSet[String(v)] = true; });
-            insideCounts = this._selectedAncestorCounts(index, selected);
-
-            visit = function (option) {
-                var key = String(option.value);
-                var children = index.childrenByParent[key] || [];
-                var isExpanded = !!expanded[key];
-                var isSelected = selectedSet[key] === true;
-                var inside = insideCounts[key] || 0;
-
-                nodes.push({
-                    value: option.value,
-                    label: option.label,
-                    level: option.level,
-                    // Level 1 is a root, sitting almost flush with the list edge; each further
-                    // level steps in by one caret width. Written as the row's padding so the
-                    // selection edge and hover wash still span the full row.
-                    indent: (Math.max((Number(option.level) || 1) - 1, 0) * 17 + 5) + 'px',
-                    hasChildren: children.length > 0,
-                    expanded: isExpanded,
-                    selected: isSelected,
-                    // A selected node reads as selected, never as partial: its own state is the
-                    // definite one, whatever sits underneath it.
-                    mixed: !isSelected && inside > 0,
-                    selectedInside: inside,
-                    descendants: index.descendantCountByValue[key] || 0
-                });
-
-                if (isExpanded) {
-                    _.each(children, visit);
-                }
-            };
-            _.each(index.roots, visit);
-
-            return nodes;
-        },
-
-        /**
-         * How many of the row's selected values sit strictly BELOW each node, keyed by node value —
-         * the basis of the checkbox's indeterminate state.
-         *
-         * Derived by climbing from every selected value to its root and crediting each ancestor
-         * once, which is the cheap direction: the answer for the whole tree costs (selected values
-         * × depth) map writes, while asking each rendered node "is anything of mine selected?"
-         * would walk its subtree — the whole option list once per top-level node. Nodes with
-         * nothing selected below them are simply absent from the result.
-         *
-         * The per-value `seen` map is what makes a malformed parent cycle terminate: a chain that
-         * comes back around stops at the first repeat, so an ancestor is credited at most once per
-         * selected value either way.
-         *
-         * @param {Object} index Option index from the options module.
-         * @param {Array} selected The row's stored values.
-         * @returns {Object.<String, Number>} Node value → number of selected values below it.
-         */
-        _selectedAncestorCounts: function (index, selected) {
-            var counts = Object.create(null);
-            var i;
-            var seen;
-            var option;
-            var key;
-
-            for (i = 0; i < selected.length; i++) {
-                option = index.byValue[String(selected[i])];
-                seen = Object.create(null);
-
-                while (option !== undefined) {
-                    key = option.parent === null || option.parent === undefined ? '' : String(option.parent);
-
-                    if (key === '' || seen[key] === true) {
-                        break;
-                    }
-                    seen[key] = true;
-                    counts[key] = (counts[key] || 0) + 1;
-                    option = index.byValue[key];
-                }
-            }
-
-            return counts;
+            return index === null
+                ? []
+                : expressionOptionTree.visibleNodes(index, row.expandedNodes(), expressionValue.asArray(row.value()));
         },
 
         /**
@@ -2369,63 +2292,43 @@ define([
          * @param {*} value Option value of the node to toggle.
          */
         toggleNode: function (row, value) {
-            var key = String(value);
-            var next = _.extend({}, row.expandedNodes());
-
-            if (next[key]) {
-                delete next[key];
-            } else {
-                next[key] = true;
-            }
-            row.expandedNodes(next);
+            row.expandedNodes(expressionOptionTree.toggleExpansion(row.expandedNodes(), value));
         },
 
         /**
-         * Number of options behind the row's tree — the size the expand-all guard is measured
-         * against. Read off the option list rather than off the index, so it costs nothing and is
-         * available before the index has ever been built.
-         *
-         * @param {Object} row Row view-model.
-         * @returns {Number}
-         */
-        _treeOptionCount: function (row) {
-            var host = this._activeOptionsHostFor(row);
-
-            return host && host.options ? host.options.length : 0;
-        },
-
-        /**
-         * True when the row's tree is small enough to be expanded in one action — the template's
-         * guard on the expand-all control.
+         * True when the row's tree is small enough to be expanded in one action — the template's guard on
+         * the expand-all control (expression-option-tree canExpandAll()).
          *
          * @param {Object} row Row view-model.
          * @returns {Boolean}
          */
         canExpandAllTreeNodes: function (row) {
-            return this.rowShowsTree(row) && this._treeOptionCount(row) <= this.treeExpandAllLimit;
+            var self = this;
+
+            return expressionOptionTree.canExpandAll({
+                showsTree: function () {
+                    return self.rowShowsTree(row);
+                },
+                optionCount: function () {
+                    return expressionFields.optionCount(self._activeOptionsHostFor(row));
+                }
+            }, this.treeExpandAllLimit);
         },
 
         /**
          * Expands every branch of the row's tree in ONE write.
          *
-         * The expanded set is exactly the index's parent keys, so nothing walks the tree and no
-         * node is visited twice. Re-checks the size guard rather than trusting the caller: the
-         * control that offers this is conditional, and a path that ever calls it anyway must not be
-         * the one that hangs the form.
+         * Re-checks the size guard rather than trusting the caller: the control that offers this is
+         * conditional, and a path that ever calls it anyway must not be the one that hangs the form.
          *
          * @param {Object} row Row view-model.
          * @returns {void}
          */
         expandAllTreeNodes: function (row) {
-            var expanded = {};
-
             if (!this.canExpandAllTreeNodes(row)) {
                 return;
             }
-            _.each(_.keys(this._treeIndexFor(row).childrenByParent), function (key) {
-                expanded[key] = true;
-            });
-            row.expandedNodes(expanded);
+            row.expandedNodes(expressionOptionTree.expandAll(this._treeIndexFor(row)));
         },
 
         /**
@@ -2440,31 +2343,15 @@ define([
         },
 
         /**
-         * Breadcrumb path label for one option value — ancestors joined down to the option's own
-         * label, from the row's cached option index. Falls back to the option's own label when no
-         * breadcrumb exists (flat lists index to their own labels, so the fallback is uniform),
-         * and to the raw value when the option is unknown. Renders as the pill tooltip and as the
-         * option text of the searched dropdown.
+         * Breadcrumb path label for one option value (expression-option-tree pathLabel()) — the
+         * pill tooltip and the option text of the searched dropdown.
          *
          * @param {Object} row Row view-model.
          * @param {*} value Option value.
          * @returns {String}
          */
         pathLabelFor: function (row, value) {
-            var index = this._treeIndexFor(row);
-            var key = String(value);
-
-            if (index) {
-                if (index.pathByValue[key] !== undefined) {
-                    return index.pathByValue[key];
-                }
-
-                if (index.byValue[key] !== undefined) {
-                    return String(index.byValue[key].label);
-                }
-            }
-
-            return key;
+            return expressionOptionTree.pathLabel(this._treeIndexFor(row), value);
         },
 
         /**
@@ -2476,17 +2363,27 @@ define([
          * @returns {Object|null} Descriptor with an `options` array, or null.
          */
         _activeOptionsHostFor: function (row) {
-            var field = this.fieldsByType[row.fieldType()];
+            var self = this;
 
-            if (!field) {
-                return null;
-            }
+            return expressionFields.optionsHost(this.fieldsByType[row.fieldType()] || null, function () {
+                return self.productAttributeInfo(row);
+            });
+        },
 
-            if (field.valueType === 'product-attribute') {
-                return this.productAttributeInfo(row);
-            }
+        /**
+         * The breadcrumb index of the row's active option list when that list is a hierarchy, null
+         * for a flat one (expression-fields hierarchyIndex()) — what a search over the list and the
+         * option tree run on.
+         *
+         * @param {Object} row Row view-model.
+         * @returns {Object|null}
+         */
+        _searchIndexFor: function (row) {
+            var self = this;
 
-            return field;
+            return expressionFields.hierarchyIndex(this._activeOptionsHostFor(row), function () {
+                return self._treeIndexFor(row);
+            });
         },
 
         /**
@@ -2512,6 +2409,8 @@ define([
             return host._ufeTreeIndex;
         },
 
+        /* ---------------- list values: pills and paste ---------------- */
+
         /**
          * Adds one value to a row's list value, ignoring it when already present.
          *
@@ -2523,45 +2422,25 @@ define([
         },
 
         /**
-         * Appends values to a row's list value in ONE observable write.
+         * Appends values to a row's list value in ONE observable write, de-duplicated
+         * (expression-list-value appendValues()), and clears the search text.
          *
          * The single write is what makes a several-hundred-entry paste usable: writing per entry
-         * would re-render the growing pill list once per value and re-run the autosave walk with
-         * it. De-duplication is folded into the same pass — against the values already stored AND
-         * against earlier entries of this batch — so a pasted list with repeats behaves exactly
-         * like clicking the same option twice. Values are stored as strings, matching what the
-         * option pickers write.
+         * would re-render the growing pill list once per value and re-run the autosave walk with it.
          *
          * @param {Object} row Row view-model.
          * @param {Array} values Values to append, in order.
-         * @returns {Number} How many were actually added — the caller's basis for reporting what a
-         *     paste did, since de-duplication can silently swallow entries.
+         * @returns {Number} How many were actually added.
          */
         _appendValues: function (row, values) {
-            var current = expressionValue.asArray(row.value());
-            // Null prototype: a value that happens to spell an Object.prototype member (a SKU
-            // named `constructor`, say) must not read as already seen and vanish.
-            var seen = Object.create(null);
-            var added = 0;
+            var result = expressionListValue.appendValues(expressionValue.asArray(row.value()), values);
 
-            _.each(current, function (v) { seen[String(v)] = true; });
-            _.each(values, function (v) {
-                var sv = String(v);
-
-                if (seen[sv]) {
-                    return;
-                }
-                seen[sv] = true;
-                current.push(sv);
-                added++;
-            });
-
-            if (added > 0) {
-                row.value(current);
+            if (result.added > 0) {
+                row.value(result.values);
             }
             row.searchText('');
 
-            return added;
+            return result.added;
         },
 
         /**
@@ -2572,10 +2451,7 @@ define([
          * @param {*} optionValue Value to remove.
          */
         removeOption: function (row, optionValue) {
-            var current = expressionValue.asArray(row.value());
-            var sv = String(optionValue);
-
-            row.value(_.filter(current, function (v) { return String(v) !== sv; }));
+            row.value(expressionListValue.removeValue(expressionValue.asArray(row.value()), optionValue));
             this._syncPillCollapse(row);
         },
 
@@ -2595,38 +2471,26 @@ define([
         },
 
         /**
-         * True when a row's clear-all control is worth offering — two or more stored values.
-         *
-         * Counted on the STORED value rather than on the rendered pills: a stored value that
-         * matches no option renders no pill, and clearing is precisely how an admin gets rid of
-         * such a leftover.
+         * True when a row's clear-all control is worth offering, counted on the stored value
+         * (expression-list-value canClearAll()).
          *
          * @param {Object} row Row view-model.
          * @returns {Boolean}
          */
         canClearAll: function (row) {
-            return expressionValue.asArray(row.value()).length >= 2;
+            return expressionListValue.canClearAll(expressionValue.asArray(row.value()));
         },
 
         /**
          * The pills a multi-value editor actually renders: all of them while expanded or while the
          * list is short enough to show whole, the first `pillCollapseLimit` otherwise.
          *
-         * Shape-agnostic on purpose — it only slices — so the same helper serves the option-backed
-         * editors (which pass option objects) and the free-text one (which passes raw values).
-         *
          * @param {Object} row Row view-model.
          * @param {Array} allPills Every pill the editor would render, in order.
          * @returns {Array} The subset to render.
          */
         visiblePills: function (row, allPills) {
-            var pills = _.isArray(allPills) ? allPills : [];
-
-            if (row.pillsExpanded() || pills.length <= this.pillCollapseLimit) {
-                return pills;
-            }
-
-            return pills.slice(0, this.pillCollapseLimit);
+            return expressionListValue.visiblePills(allPills, row.pillsExpanded(), this.pillCollapseLimit);
         },
 
         /**
@@ -2639,15 +2503,15 @@ define([
          * @returns {String}
          */
         pillToggleLabel: function (row, allPills) {
-            var total = _.isArray(allPills) ? allPills.length : 0;
+            var hidden = expressionListValue.hiddenPillCount(allPills, this.pillCollapseLimit);
 
-            if (total <= this.pillCollapseLimit) {
+            if (hidden === 0) {
                 return '';
             }
 
             return row.pillsExpanded()
                 ? $t('Show fewer')
-                : $t('+%1 more').replace('%1', total - this.pillCollapseLimit);
+                : $t('+%1 more').replace('%1', hidden);
         },
 
         /**
@@ -2660,33 +2524,24 @@ define([
         },
 
         /**
-         * Drops the expanded flag once a row's value fits the collapse limit again, so a list that
-         * later grows past the limit starts collapsed instead of inheriting an expansion the admin
-         * asked for on a different set of values.
+         * Drops the expanded flag once a row's value fits the collapse limit again
+         * (expression-list-value collapsesBack()).
          *
          * @param {Object} row Row view-model.
          */
         _syncPillCollapse: function (row) {
-            if (row.pillsExpanded() && expressionValue.asArray(row.value()).length <= this.pillCollapseLimit) {
+            if (expressionListValue.collapsesBack(row.pillsExpanded(), function () {
+                return expressionValue.asArray(row.value()).length;
+            }, this.pillCollapseLimit)) {
                 row.pillsExpanded(false);
             }
         },
 
         /**
-         * Turns a paste of separator-joined text into pills — the workflow a rule built from a
-         * spreadsheet column lives on.
-         *
-         * Text with no separator is not a list: the handler declines it and the browser pastes it
-         * into the search input as usual, leaving the type-ahead flow untouched. Text WITH a
-         * separator is split into trimmed entries and appended in one write:
-         *  - `mode` 'options' resolves every entry against the row's own option list — an option's
-         *    value verbatim, or its label matched case-insensitively (a display label's leading
-         *    depth prefix is ignored, so pasted category names resolve). Unresolvable entries are
-         *    skipped rather than stored as junk values that would silently match nothing, and the
-         *    hint under the pills reports how many. Ambiguous labels — the same name under
-         *    different parents — resolve to the first option carrying it.
-         *  - any other mode appends entries verbatim: a free-text attribute has no option list to
-         *    check against, and refusing unknown SKUs would defeat the point.
+         * Turns a paste of separator-joined text into pills — the workflow a rule built from a spreadsheet
+         * column lives on. What the paste is — not a list, a list of nothing, or entries resolved or taken as
+         * typed — is expression-list-value planPaste()'s answer; the values are appended in one write and the
+         * hint under the pills reports what happened.
          *
          * @param {Object} row Row view-model.
          * @param {Event} event The paste event carrying the clipboard payload.
@@ -2697,37 +2552,21 @@ define([
          *     every return value but literal true.
          */
         handlePaste: function (row, event, mode) {
-            var text = this._clipboardText(event);
-            var lookup;
-            var entries;
-            var resolved = [];
-            var skipped = 0;
+            var self = this;
+            var plan = expressionListValue.planPaste(this._clipboardText(event), mode, function () {
+                return self._pasteLookupFor(row);
+            });
 
-            if (!expressionValue.hasListSeparators(text)) {
+            if (plan === null) {
                 return true;
             }
             // From here the paste IS a list, so any hint on screen describes a previous one and
             // goes now — including when this paste turns out to carry nothing but separators.
             this._clearPasteNotice(row);
-            entries = expressionValue.splitPasteText(text);
 
-            if (entries.length === 0) {
-                return false;
+            if (plan.parsed > 0) {
+                this._showPasteNotice(row, plan.parsed, this._appendValues(row, plan.values), plan.skipped);
             }
-            lookup = mode === 'options' ? this._pasteLookupFor(row) : null;
-
-            _.each(entries, function (entry) {
-                var value = lookup ? this._resolvePastedEntry(lookup, entry) : entry;
-
-                if (value === null) {
-                    skipped++;
-
-                    return;
-                }
-                resolved.push(value);
-            }, this);
-
-            this._showPasteNotice(row, entries.length, this._appendValues(row, resolved), skipped);
 
             return false;
         },
@@ -2736,11 +2575,15 @@ define([
          * Plain-text payload of a paste event, or '' when the clipboard is unreadable — an empty
          * payload carries no separator, so the handler declines and the browser does its own thing.
          *
-         * @param {Event} event Paste event.
+         * Knockout binds events through jQuery on admin pages, so the browser's own event, the one
+         * carrying the clipboard, is on `originalEvent`.
+         *
+         * @param {Event} event Paste event, or the jQuery event wrapping it.
          * @returns {String}
          */
         _clipboardText: function (event) {
-            var clipboard = event && event.clipboardData ? event.clipboardData : null;
+            var source = event && event.originalEvent ? event.originalEvent : event;
+            var clipboard = source && source.clipboardData ? source.clipboardData : null;
 
             if (!clipboard || typeof clipboard.getData !== 'function') {
                 return '';
@@ -2750,68 +2593,15 @@ define([
         },
 
         /**
-         * Builds the value/label lookup a pasted list resolves through, from the row's active
-         * option list. One pass per paste — pasting is a one-off action, so nothing is cached and
-         * no stale index can survive an option list that changed.
-         *
-         * Labels index twice when they carry a leading depth prefix (some option sources render
-         * hierarchy into the label itself): once as stored, once stripped, both lower-cased. First
-         * entry wins per key, so a duplicated label resolves to the first option carrying it in
-         * list order.
-         *
-         * Both maps have a null prototype: without one, pasting `toString` would "resolve" to an
-         * Object.prototype member and store a function as a condition value.
+         * The value/label lookup a pasted list resolves through, from the row's active option list.
          *
          * @param {Object} row Row view-model.
-         * @returns {{byValue: Object, byLabel: Object}} Maps from an entry to the option value it
-         *     resolves to.
+         * @returns {{byValue: Object, byLabel: Object}}
          */
         _pasteLookupFor: function (row) {
             var host = this._activeOptionsHostFor(row);
-            var options = host && host.options ? host.options : [];
-            var byValue = Object.create(null);
-            var byLabel = Object.create(null);
-            var self = this;
 
-            _.each(options, function (opt) {
-                var value = String(opt.value);
-                var label = String(opt.label === null || opt.label === undefined ? '' : opt.label);
-                var stripped = self.displayLabel(label).toLowerCase();
-
-                if (byValue[value] === undefined) {
-                    byValue[value] = value;
-                }
-
-                if (label !== '' && byLabel[label.toLowerCase()] === undefined) {
-                    byLabel[label.toLowerCase()] = value;
-                }
-
-                if (stripped !== '' && byLabel[stripped] === undefined) {
-                    byLabel[stripped] = value;
-                }
-            });
-
-            return {byValue: byValue, byLabel: byLabel};
-        },
-
-        /**
-         * Resolves one pasted entry to an option value, or null when the row's options carry no
-         * such value and no such label.
-         *
-         * @param {{byValue: Object, byLabel: Object}} lookup Lookup from _pasteLookupFor().
-         * @param {String} entry One trimmed pasted entry.
-         * @returns {String|null}
-         */
-        _resolvePastedEntry: function (lookup, entry) {
-            var key = String(entry);
-            var byLabel;
-
-            if (lookup.byValue[key] !== undefined) {
-                return lookup.byValue[key];
-            }
-            byLabel = lookup.byLabel[key.toLowerCase()];
-
-            return byLabel === undefined ? null : byLabel;
+            return expressionListValue.pasteLookup(expressionFields.valueOptions(host));
         },
 
         /**
@@ -2857,6 +2647,8 @@ define([
             }
             row.pasteNotice('');
         },
+
+        /* ---------------- dropdowns ---------------- */
 
         /**
          * Opens a row's dropdown with nothing highlighted, so the first ArrowDown lands on the
@@ -2910,14 +2702,16 @@ define([
          *
          * A call naming no control asks about the open dropdown whatever it is, which is what the
          * keyboard handlers want: the keystroke arrived on the input that owns the list, so there is
-         * nothing to disambiguate.
+         * nothing to disambiguate (expression-listbox dropdownOwnedBy()).
          *
          * @param {Object} row Row view-model.
          * @param {String} [control] Name of the combobox asking.
          * @returns {Boolean}
          */
         dropdownOwnedBy: function (row, control) {
-            return control === undefined || row.dropdownControl() === control;
+            return expressionListbox.dropdownOwnedBy(control, function () {
+                return row.dropdownControl();
+            });
         },
 
         /* ---------------- keyboard navigation & ARIA ---------------- */
@@ -2956,9 +2750,10 @@ define([
          * nothing to say at all, and that case is the suggest visibility rule's to answer.
          *
          * A searchable single-select always has something to show while open — matches, or the "no
-         * matches" verdict over its own option list — so it answers before the type-ahead rule is
-         * consulted: an attribute whose backend supports suggestions must not have its ATTRIBUTE
-         * list gated by the state of a value suggestion nobody asked for.
+         * matches" verdict over its own option list — and the variant is resolved owner-first, so an
+         * attribute whose backend supports suggestions never has its ATTRIBUTE list gated by the
+         * state of a value suggestion nobody asked for. Each variant's answer is expression-listbox
+         * variantListVisible()'s.
          *
          * @param {Object} row Row view-model.
          * @param {*} query The text the suggestions were requested for — the row's value on a
@@ -2968,37 +2763,95 @@ define([
          * @returns {Boolean}
          */
         dropdownListVisible: function (row, query, control) {
+            var self = this;
+
             if (!row.dropdownOpen() || !this.dropdownOwnedBy(row, control)) {
                 return false;
             }
 
-            if (searchableSelect(row.dropdownControl()) !== null) {
-                return true;
-            }
-
-            return this.rowUsesSuggestList(row) ? this.suggestDropdownVisible(row, query) : true;
+            return expressionListbox.variantListVisible(this._dropdownVariant(row), {
+                suggestHasContent: function () {
+                    return self.suggestDropdownVisible(row, query);
+                }
+            });
         },
 
         /**
-         * True when the row's dropdown is fed by the AJAX type-ahead rather than by an option list.
+         * The variant of the row's dropdown (expression-listbox dropdownVariant()).
+         *
+         * @param {Object} row Row view-model.
+         * @returns {String}
+         */
+        _dropdownVariant: function (row) {
+            var self = this;
+
+            return expressionListbox.dropdownVariant({
+                isSearchableSelect: function () {
+                    return searchableSelect(row.dropdownControl()) !== null;
+                },
+                showsTree: function () {
+                    return self.rowShowsTree(row);
+                },
+                usesSuggestions: function () {
+                    return self.rowUsesSuggestList(row);
+                }
+            });
+        },
+
+        /**
+         * The probe the dropdown variants ask whether the row's dropdown replaces its value.
+         *
+         * @param {Object} row Row view-model.
+         * @returns {{replacesValue: Function}}
+         */
+        _replacesValueProbe: function (row) {
+            var self = this;
+
+            return {
+                replacesValue: function () {
+                    return self.dropdownReplacesValue(row);
+                }
+            };
+        },
+
+        /**
+         * True when the row's dropdown is fed by the AJAX type-ahead rather than by an option list
+         * (expression-listbox rowUsesSuggestList()).
          *
          * @param {Object} row Row view-model.
          * @returns {Boolean}
          */
         rowUsesSuggestList: function (row) {
-            return !this.productAttributeHasOptions(row) && this.productAttributeSupportsSuggest(row);
+            var self = this;
+
+            return expressionListbox.rowUsesSuggestList({
+                hasOptions: function () {
+                    return self.productAttributeHasOptions(row);
+                },
+                supportsSuggest: function () {
+                    return self.productAttributeSupportsSuggest(row);
+                }
+            });
         },
 
         /**
-         * True for the one dropdown that replaces the row's value instead of adding to a list: the
-         * single-value type-ahead of a free-text attribute. Every other dropdown — the flat option
-         * lists, the option tree and the multi-value type-ahead — appends a value.
+         * True for the one dropdown that replaces the row's value instead of adding to a list, the
+         * single-value type-ahead (expression-listbox dropdownReplacesValue()).
          *
          * @param {Object} row Row view-model.
          * @returns {Boolean}
          */
         dropdownReplacesValue: function (row) {
-            return this.rowUsesSuggestList(row) && !this.rowUsesListOperator(row);
+            var self = this;
+
+            return expressionListbox.dropdownReplacesValue({
+                usesSuggestList: function () {
+                    return self.rowUsesSuggestList(row);
+                },
+                usesListOperator: function () {
+                    return self.rowUsesListOperator(row);
+                }
+            });
         },
 
         /**
@@ -3010,29 +2863,16 @@ define([
          * the "no matches" verdict, the truncated-search hint) are not here: they are rendered
          * from state, not from these arrays, so nothing selectable-looking is ever unselectable.
          *
-         * The open dropdown's OWNER decides first: a searchable single-select's entries come from its
-         * own registry-declared option list, which has nothing to do with the row's value editor.
+         * The open dropdown's OWNER decides first (expression-listbox dropdownVariant()): a searchable
+         * single-select's entries come from its own registry-declared option list, which has nothing
+         * to do with the row's value editor.
          *
          * @param {Object} row Row view-model.
          * @returns {Array.<Object>} Tree nodes in tree mode, otherwise suggestion or option
          *     entries — every entry carrying the `value` a commit writes.
          */
         navigableDropdownItems: function (row) {
-            var control = row.dropdownControl();
-
-            if (searchableSelect(control) !== null) {
-                return this.filteredSearchableOptions(row, control).items;
-            }
-
-            if (this.rowShowsTree(row)) {
-                return this.visibleTreeNodes(row);
-            }
-
-            if (this.rowUsesSuggestList(row)) {
-                return row.suggestedOptions();
-            }
-
-            return this.filteredDropdownOptions(row).items;
+            return DROPDOWN_ITEMS[this._dropdownVariant(row)](this, row);
         },
 
         /**
@@ -3044,9 +2884,7 @@ define([
          * @returns {{items: Array.<Object>, capped: Boolean}}
          */
         filteredDropdownOptions: function (row) {
-            var field = this.fieldsByType[row.fieldType()];
-
-            return field && field.valueType === 'product-attribute'
+            return expressionFields.followsAttribute(this.fieldsByType[row.fieldType()] || null)
                 ? this.filteredProductAttributeOptions(row)
                 : this.filteredOptionsFor(row);
         },
@@ -3057,16 +2895,13 @@ define([
          * The stored index is validated against the current list on every read rather than being
          * corrected on every list change: lists re-filter on each keystroke, each pick and each
          * arriving suggestion, and an index checked at the point of use cannot survive any of them
-         * as a pointer past the end.
+         * as a pointer past the end (expression-listbox highlightedItem()).
          *
          * @param {Object} row Row view-model.
          * @returns {Object|null}
          */
         activeDropdownItem: function (row) {
-            var items = this.navigableDropdownItems(row);
-            var index = row.activeOptionIndex();
-
-            return index >= 0 && index < items.length ? items[index] : null;
+            return expressionListbox.highlightedItem(this.navigableDropdownItems(row), row.activeOptionIndex());
         },
 
         /**
@@ -3168,13 +3003,13 @@ define([
          *
          * The searchable single-selects settle one value by definition, whatever the row's value
          * editor happens to be: the Attribute control picks an attribute code, not a value, so the
-         * value editor's shape says nothing about it.
+         * value editor's shape says nothing about it (expression-listbox variantAddsToList()).
          *
          * @param {Object} row Row view-model.
          * @returns {Boolean}
          */
         dropdownAddsToList: function (row) {
-            return searchableSelect(row.dropdownControl()) === null && !this.dropdownReplacesValue(row);
+            return expressionListbox.variantAddsToList(this._dropdownVariant(row), this._replacesValueProbe(row));
         },
 
         /**
@@ -3221,9 +3056,8 @@ define([
         },
 
         /**
-         * True when the row's current selection already holds an option value. Array values match by
-         * membership, scalar values by equality; everything compares as a string, which is the
-         * shape option values are stored in.
+         * True when the row's current selection already holds an option value
+         * (expression-list-value holds()).
          *
          * What "the selection" is depends on the open dropdown: a searchable single-select is asked
          * about ITS own subject — the Attribute control's is the chosen attribute code, not the row's
@@ -3236,14 +3070,8 @@ define([
          */
         optionIsSelected: function (row, optionValue) {
             var control = searchableSelect(row.dropdownControl());
-            var value = control === null ? row.value() : control.selected(this, row);
-            var target = String(optionValue);
 
-            if (_.isArray(value)) {
-                return _.some(value, function (v) { return String(v) === target; });
-            }
-
-            return String(value === null || value === undefined ? '' : value) === target;
+            return expressionListValue.holds(control === null ? row.value() : control.selected(this, row), optionValue);
         },
 
         /**
@@ -3259,24 +3087,9 @@ define([
         },
 
         /**
-         * The combobox/listbox key pattern, shared by all four dropdown variants.
-         *
-         * ArrowDown and ArrowUp move the highlight over the entries the row currently renders
-         * (ArrowDown from nothing lands on the first entry, ArrowUp on the last; ArrowUp off the
-         * top clears the highlight, which is how an admin gets back to committing the text they
-         * typed). Enter commits the highlighted entry. Escape closes the dropdown. In the option
-         * tree, ArrowRight expands the highlighted parent and ArrowLeft collapses it, Enter on
-         * a collapsed parent expands it rather than selecting it — one keystroke, one obvious
-         * effect — and Space toggles the highlighted node's selection, which is what a click on the
-         * row does. Home and End jump to the ends of the list.
-         *
-         * Keys that a text input needs are only taken over once a highlight exists: ArrowLeft,
-         * ArrowRight, Home and End move the caret while the admin is typing, and only act on the
-         * list after ArrowDown has moved into it. Space is taken over on the same terms and only in
-         * the tree, which by definition has no search text — so a space typed into a breadcrumb
-         * query, where it separates the tokens the search matches on, is never swallowed. Every
-         * other key — every character, every deletion — clears the highlight, because it is about
-         * to change the query the list was built from.
+         * The combobox/listbox key pattern, shared by all four dropdown variants
+         * (expression-listbox dropdownKeyAction() states it). The pattern resolves the key into
+         * an action against what the row's dropdown shows now; DROPDOWN_KEY_ACTIONS applies it.
          *
          * @param {Object} row Row view-model.
          * @param {Event} event The keydown event.
@@ -3286,136 +3099,28 @@ define([
          *     true.
          */
         handleDropdownKeydown: function (row, event, query) {
-            var key = this._keyName(event);
-            var items;
-
-            if (key === 'Escape') {
-                if (!row.dropdownOpen()) {
-                    return true;
+            var self = this;
+            var action = expressionListbox.dropdownKeyAction(expressionListbox.keyName(event), {
+                isOpen: function () {
+                    return row.dropdownOpen();
+                },
+                isListVisible: function () {
+                    return self.dropdownListVisible(row, query);
+                },
+                items: function () {
+                    return self.navigableDropdownItems(row);
+                },
+                activeIndex: function () {
+                    return row.activeOptionIndex();
+                },
+                showsTree: function () {
+                    return self.rowShowsTree(row);
                 }
-                this.closeDropdown(row);
+            });
 
-                return false;
-            }
+            DROPDOWN_KEY_ACTIONS[action.name](this, row, action);
 
-            if (!this.dropdownListVisible(row, query)) {
-                // A dropdown closed by Escape re-opens on ArrowDown without needing a re-focus.
-                if (key === 'ArrowDown' && !row.dropdownOpen()) {
-                    this.openDropdown(row);
-
-                    return false;
-                }
-
-                return this._resetHighlightUnlessNavigating(row, key);
-            }
-            items = this.navigableDropdownItems(row);
-
-            if (key === 'ArrowDown' || key === 'ArrowUp') {
-                this._moveHighlight(row, items.length, key === 'ArrowDown' ? 1 : -1);
-
-                return false;
-            }
-
-            if (this.activeDropdownItem(row) === null) {
-                return this._resetHighlightUnlessNavigating(row, key);
-            }
-
-            return this._handleActiveEntryKey(row, key, items);
-        },
-
-        /**
-         * The half of the key pattern that needs a highlighted entry: committing it, toggling its
-         * selection, jumping to the ends of the list, and expanding or collapsing it in the option
-         * tree.
-         *
-         * @param {Object} row Row view-model.
-         * @param {String} key Normalised key name.
-         * @param {Array.<Object>} items The row's rendered entries.
-         * @returns {Boolean} true when the key was not consumed.
-         */
-        _handleActiveEntryKey: function (row, key, items) {
-            var item = this.activeDropdownItem(row);
-
-            if (key === 'Enter') {
-                this.commitDropdownItem(row, item);
-
-                return false;
-            }
-
-            // The listbox convention, and the tree's only way to DESELECT from the keyboard: Enter
-            // on a collapsed parent is spoken for by expansion, so selection needs a key of its own.
-            if (key === ' ' && this.rowShowsTree(row)) {
-                this.toggleTreeNode(row, item.value);
-
-                return false;
-            }
-
-            if (key === 'Home' || key === 'End') {
-                row.activeOptionIndex(key === 'Home' ? 0 : items.length - 1);
-                this._scrollHighlightIntoView(row);
-
-                return false;
-            }
-
-            if ((key === 'ArrowRight' || key === 'ArrowLeft') && this.rowShowsTree(row)) {
-                // Only a parent in the state the key would change reacts; anything else leaves the
-                // key to the text caret, so arrowing through the search text never toggles a node.
-                if (item.hasChildren && item.expanded === (key === 'ArrowLeft')) {
-                    this.toggleNode(row, item.value);
-
-                    return false;
-                }
-            }
-
-            return this._resetHighlightUnlessNavigating(row, key);
-        },
-
-        /**
-         * Clears the highlight for any key that is about to edit the query, and reports the key as
-         * unconsumed either way.
-         *
-         * @param {Object} row Row view-model.
-         * @param {String} key Normalised key name.
-         * @returns {Boolean} Always true.
-         */
-        _resetHighlightUnlessNavigating: function (row, key) {
-            if (NAVIGATION_KEYS[key] !== true) {
-                row.activeOptionIndex(-1);
-            }
-
-            return true;
-        },
-
-        /**
-         * Moves the highlight by one entry and scrolls it into view.
-         *
-         * -1 is the position of the text the admin typed, above the first entry: moving down from
-         * it enters the list, moving up off the first entry returns to it, and moving up from it
-         * wraps to the last entry so a short list is reachable from either direction. Moving down
-         * off the last entry stays there — running past the end must not silently un-highlight the
-         * entry Enter is about to commit.
-         *
-         * @param {Object} row Row view-model.
-         * @param {Number} count How many entries the list holds.
-         * @param {Number} step +1 down, -1 up.
-         * @returns {void}
-         */
-        _moveHighlight: function (row, count, step) {
-            var next = row.activeOptionIndex() + step;
-
-            if (count === 0) {
-                row.activeOptionIndex(-1);
-
-                return;
-            }
-
-            if (next < -1) {
-                next = count - 1;
-            } else if (next >= count) {
-                next = count - 1;
-            }
-            row.activeOptionIndex(next);
-            this._scrollHighlightIntoView(row);
+            return !action.consumed;
         },
 
         /**
@@ -3423,7 +3128,7 @@ define([
          *
          * Runs against the element Knockout has already rendered — only its modifier class
          * changed, never its existence — so no deferral is needed. A missing element (an index
-         * that outran the list) simply scrolls nothing.
+         * that outran the list, or no highlight at all) simply scrolls nothing.
          *
          * @param {Object} row Row view-model.
          * @returns {void}
@@ -3440,77 +3145,31 @@ define([
         /**
          * Commits one dropdown entry — the keyboard's Enter doing what a click on that entry does.
          *
-         * The writes are the dropdown shapes: a searchable single-select settles its one value and
-         * closes, an option tree expands a collapsed parent and otherwise toggles the node's
-         * selection, a list-valued editor appends the value as a pill, and the single-value
-         * type-ahead replaces the value and closes. Each one calls the same component method the
-         * entry's click binding calls, so mouse and keyboard cannot drift.
-         *
-         * The single-selects answer first, for the same reason they do in navigableDropdownItems: the
-         * row's value editor may be a tree or a list, and the Attribute control's Enter must not be
-         * read as a pick in it.
+         * The variant is resolved owner-first (expression-listbox dropdownVariant()), its commit rule names
+         * the action (expression-listbox variantCommit()), and DROPDOWN_COMMIT_ACTIONS applies it through the
+         * method the entry's click binding calls, so mouse and keyboard cannot drift.
          *
          * @param {Object} row Row view-model.
          * @param {Object} item Entry from navigableDropdownItems().
          * @returns {void}
          */
         commitDropdownItem: function (row, item) {
-            var control = row.dropdownControl();
+            var action = expressionListbox.variantCommit(this._dropdownVariant(row), item, this._replacesValueProbe(row));
 
-            if (searchableSelect(control) !== null) {
-                this.commitSearchableSelect(row, control, item.value);
-
-                return;
-            }
-
-            if (this.rowShowsTree(row)) {
-                if (item.hasChildren && !item.expanded) {
-                    this.toggleNode(row, item.value);
-
-                    return;
-                }
-                this.toggleTreeNode(row, item.value);
-
-                return;
-            }
-
-            if (this.dropdownReplacesValue(row)) {
-                row.value(item.value);
-                this.closeDropdown(row);
-
-                return;
-            }
-            this.addOption(row, item.value);
+            DROPDOWN_COMMIT_ACTIONS[action.name](this, row, action.value);
         },
 
         /**
-         * Toggles one option-tree node's selection: the node's value joins the row's list when it
-         * is absent and leaves it when it is already there.
-         *
-         * Both directions are the point. Selected nodes stay on screen so their subtrees remain
-         * reachable, which used to leave them inert — the only way to undo a mis-click was to find
-         * the value's pill somewhere above the list. Clicking the row again is now the obvious
-         * undo, and it is the same write the pill's remove button performs.
-         *
-         * Only the node's OWN value moves, never its descendants': the stored value is a flat list
-         * of option values, and what a listed value covers below itself is the consuming rule's
-         * business, not this picker's. Selecting descendants here would store a set nobody asked
-         * for and misstate what was chosen.
-         *
-         * Selectedness is read from the row's value rather than taken from the node, so a click
-         * acts on the state the row is in now, not on the state its last render captured.
+         * Toggles one option-tree node's selection (expression-option-tree selectionToggle()), through the
+         * write a pill's remove button or an option click performs. Selectedness is read from the row's value
+         * rather than taken from the node, so a click acts on the state the row is in now.
          *
          * @param {Object} row Row view-model.
          * @param {*} value Option value of the node to toggle.
          * @returns {void}
          */
         toggleTreeNode: function (row, value) {
-            if (this.optionIsSelected(row, value)) {
-                this.removeOption(row, value);
-
-                return;
-            }
-            this.addOption(row, value);
+            TREE_SELECTION_ACTIONS[expressionOptionTree.selectionToggle(this.optionIsSelected(row, value))](this, row, value);
         },
 
         /**
@@ -3520,7 +3179,7 @@ define([
          * These editors take their values from the list, never from the text in the input, so
          * Enter with nothing highlighted has nothing to commit — and every one of them sits inside
          * the admin form, where an unhandled Enter submits it. Swallowing costs nothing and removes
-         * a save nobody asked for.
+         * a save nobody asked for (expression-listbox editorKeyFallthrough()).
          *
          * @param {Object} row Row view-model.
          * @param {Event} event The keydown event.
@@ -3532,7 +3191,7 @@ define([
                 return false;
             }
 
-            return this._keyName(event) !== 'Enter';
+            return !expressionListbox.editorKeyFallthrough('value', expressionListbox.keyName(event)).consumed;
         },
 
         /**
@@ -3541,35 +3200,23 @@ define([
          *
          * Order is the point. With an entry highlighted, Enter commits that suggestion; with
          * nothing highlighted, Enter commits the text as typed — which is what a free-text list
-         * editor is for, and what the admin sees in the input.
+         * editor is for, and what the admin sees in the input (expression-listbox
+         * editorKeyFallthrough(); EDITOR_KEY_ACTIONS applies it).
          *
          * @param {Object} row Row view-model.
          * @param {Event} event The keydown event.
          * @returns {Boolean} true to let the browser act on the key, false when it was consumed.
          */
         handleFreeTextKeydown: function (row, event) {
+            var action;
+
             if (this.handleDropdownKeydown(row, event, row.searchText()) !== true) {
                 return false;
             }
+            action = expressionListbox.editorKeyFallthrough('free-text', expressionListbox.keyName(event));
+            EDITOR_KEY_ACTIONS[action.name](this, row);
 
-            if (this._keyName(event) === 'Enter') {
-                this.commitFreeTextValue(row);
-
-                return false;
-            }
-
-            return true;
-        },
-
-        /**
-         * Normalised name of a key event, from KeyboardEvent.key. A synthetic event without one
-         * reads as no key at all, which every branch treats as "not a navigation key".
-         *
-         * @param {Event} event Key event.
-         * @returns {String}
-         */
-        _keyName: function (event) {
-            return event && typeof event.key === 'string' ? event.key : '';
+            return !action.consumed;
         },
 
         /**
@@ -3596,11 +3243,10 @@ define([
          * @returns {String}
          */
         pillToggleAriaLabel: function (row, allPills) {
-            var total = _.isArray(allPills) ? allPills.length : 0;
-
             return row.pillsExpanded()
                 ? $t('Show fewer selected values')
-                : $t('Show %1 more selected values').replace('%1', total - this.pillCollapseLimit);
+                : $t('Show %1 more selected values')
+                    .replace('%1', expressionListValue.hiddenPillCount(allPills, this.pillCollapseLimit));
         },
 
         /**
@@ -3656,32 +3302,47 @@ define([
                 : $t('Expanding all is unavailable above %1 entries').replace('%1', this.treeExpandAllLimit);
         },
 
+        /**
+         * The label of the row's operator, or the operator itself when no descriptor carries it.
+         *
+         * @param {Object} row Row view-model.
+         * @returns {*}
+         */
         labelForOperator: function (row) {
-            var ops = this.operatorsFor(row);
-            var op = row.operator();
-            var match = _.findWhere(ops, {value: op});
-            return match ? match.label : op;
-        },
-
-        labelForOptionValue: function (row, optionValue) {
-            var options = this.valueOptionsFor(row);
-            var match = _.findWhere(options, {value: String(optionValue)});
-            return this.displayLabel(match ? match.label : optionValue);
+            return expressionFields.operatorLabel(this.operatorsFor(row), row.operator());
         },
 
         /**
-         * Strips the leading depth prefix (long dashes + spaces) that the Category source adds for
-         * tree-rendering inside the dropdown. The hierarchy is useful while browsing, but redundant
-         * once an option is selected — the pill or preview should just show the leaf label.
+         * The bare label of one of the row's field options, or the value itself when no option
+         * carries it.
+         *
+         * @param {Object} row Row view-model.
+         * @param {*} optionValue
+         * @returns {String}
          */
-        displayLabel: function (label) {
-            return String(label == null ? '' : label).replace(/^[\s—–-]+/, '');
+        labelForOptionValue: function (row, optionValue) {
+            return this.displayLabel(expressionFields.optionLabel(this.valueOptionsFor(row), optionValue));
         },
 
+        /**
+         * A label without the leading depth prefix some option sources render into it
+         * (expression-options displayLabel()): useful while browsing, redundant once chosen.
+         *
+         * @param {*} label
+         * @returns {String}
+         */
+        displayLabel: function (label) {
+            return expressionOptions.displayLabel(label);
+        },
+
+        /**
+         * The label of the row's picked attribute, or its code when no descriptor carries it.
+         *
+         * @param {Object} row Row view-model.
+         * @returns {*}
+         */
         labelForProductAttribute: function (row) {
-            var attrs = this.attributesFor(row);
-            var match = _.findWhere(attrs, {value: row.productAttribute()});
-            return match ? match.label : row.productAttribute();
+            return expressionFields.attributeLabel(this.attributesFor(row), row.productAttribute());
         },
 
         /* ---------------- component wording handed to the templates ---------------- */
@@ -3783,57 +3444,46 @@ define([
         /**
          * One-line contents summary of a group: its direct condition rows and, when any exist,
          * its direct child groups. Direct children only — what a nested group holds is that
-         * group's own summary to state.
+         * group's own summary to state (expression-tree groupContents()).
          *
          * @param {Object} group Group view-model.
          * @returns {String}
          */
         groupSummary: function (group) {
-            var rows = 0;
-            var groups = 0;
-            var text;
+            var contents = expressionTree.groupContents(group.children());
+            var text = contents.conditions === 1
+                ? $t('1 condition')
+                : $t('%1 conditions').replace('%1', contents.conditions);
 
-            _.each(group.children(), function (child) {
-                if (child.kind === 'group') {
-                    groups++;
-                } else {
-                    rows++;
-                }
-            });
-
-            text = rows === 1 ? $t('1 condition') : $t('%1 conditions').replace('%1', rows);
-
-            if (groups > 0) {
-                text += ' · ' + (groups === 1 ? $t('1 group') : $t('%1 groups').replace('%1', groups));
+            if (contents.groups > 0) {
+                text += ' · ' + (contents.groups === 1 ? $t('1 group') : $t('%1 groups').replace('%1', contents.groups));
             }
 
             return text;
         },
 
         /**
-         * True when a group directly holds at least one condition row — the render condition of
-         * the Field/Operator/Value column-caption line, which would caption nothing over a group
-         * holding only child groups.
+         * True when a group directly holds at least one condition row — the render condition of the
+         * Field/Operator/Value column-caption line (expression-tree groupContents()).
          *
          * @param {Object} group Group view-model.
          * @returns {Boolean}
          */
         groupHasConditionRows: function (group) {
-            return _.some(group.children(), function (child) {
-                return child.kind === 'condition';
-            });
+            return expressionTree.groupContents(group.children()).hasConditions;
         },
 
         /**
          * True when a group holds nothing at all — the render condition of the inline
          * empty-group hint. The serialiser drops an empty group, so the hint says exactly that
-         * instead of leaving a bare box that looks like a rendering failure.
+         * instead of leaving a bare box that looks like a rendering failure (expression-tree
+         * groupContents()).
          *
          * @param {Object} group Group view-model.
          * @returns {Boolean}
          */
         groupIsEmpty: function (group) {
-            return group.children().length === 0;
+            return expressionTree.groupContents(group.children()).empty;
         },
 
         /**
@@ -4076,44 +3726,28 @@ define([
 
         /**
          * The rule-summary chip beside the builder's heading: how many conditions the whole rule
-         * holds and — once any group nests — how deep. The one line that still describes the
-         * whole rule while a long one is scrolled.
+         * holds and — once any group nests — how deep (expression-tree ruleSummary()). The one line
+         * that still describes the whole rule while a long one is scrolled.
          *
          * @returns {String}
          */
         ruleSummaryText: function () {
-            var conditions = this._conditionCount(this.rootGroup());
-            var depth;
+            var summary = expressionTree.ruleSummary(this._shapeOf(this.rootGroup()));
             var text;
 
-            if (conditions === 0) {
+            if (summary.conditions === 0) {
                 return $t('No conditions yet');
             }
 
-            text = conditions === 1 ? $t('1 condition') : $t('%1 conditions').replace('%1', conditions);
-            depth = this._heightOf(this.rootGroup());
+            text = summary.conditions === 1
+                ? $t('1 condition')
+                : $t('%1 conditions').replace('%1', summary.conditions);
 
-            if (depth > 1) {
-                text += ' · ' + $t('Nesting depth %1').replace('%1', depth);
+            if (summary.depth !== null) {
+                text += ' · ' + $t('Nesting depth %1').replace('%1', summary.depth);
             }
 
             return text;
-        },
-
-        /**
-         * How many condition rows the subtree below a group holds, at any depth.
-         *
-         * @param {Object} group Group view-model.
-         * @returns {Number}
-         */
-        _conditionCount: function (group) {
-            var count = 0;
-
-            _.each(group.children(), function (child) {
-                count += child.kind === 'group' ? this._conditionCount(child) : 1;
-            }, this);
-
-            return count;
         },
 
         /**
@@ -4155,58 +3789,50 @@ define([
         },
 
         /**
-         * True when the drop indicator belongs in the gap directly ABOVE this node.
-         *
-         * The template renders one indicator per gap and asks per node, because inside the
-         * children foreach the owning group is out of reach: identifying a gap by the node that
-         * follows it needs nothing but the node itself. The comparison is by identity against the
-         * target group's current children, so it costs no tree walk per rendered node.
+         * True when the drop indicator belongs in the gap directly ABOVE this node
+         * (expression-reorder marksGapBefore()). The template renders one indicator per gap and asks per
+         * node, because inside the children foreach the owning group is out of reach.
          *
          * @param {Object} node Row or group view-model.
          * @returns {Boolean}
          */
         isDropSlotBefore: function (node) {
-            var target = this.dropTarget();
-
-            return target !== null && target.group.children()[target.index] === node;
+            return expressionReorder.marksGapBefore(this.dropTarget(), node, function (group) {
+                return group.children();
+            });
         },
 
         /**
          * True when the drop indicator belongs after a group's last child — the one gap that has no
-         * following node to name it, and therefore the group's own to answer for. Together with
-         * isDropSlotBefore this covers every insertion slot exactly once.
+         * following node to name it, and therefore the group's own to answer for (expression-reorder
+         * marksGapAtEnd()). Together with isDropSlotBefore this covers every insertion slot exactly
+         * once.
          *
          * @param {Object} group Group view-model.
          * @returns {Boolean}
          */
         isDropSlotAtEnd: function (group) {
-            var target = this.dropTarget();
-
-            return target !== null && target.group === group && target.index === group.children().length;
+            return expressionReorder.marksGapAtEnd(this.dropTarget(), group, function () {
+                return group.children().length;
+            });
         },
 
         /**
          * Begins a pointer drag of one node.
          *
-         * The handle captures the pointer, so every later move and the release are delivered to it
-         * even once the pointer has left the handle, the row, or the window — no document-level
-         * move listener, and no drag lost the moment the pointer outruns the element it started on.
-         * Escape is the one thing capture cannot deliver: key events follow focus, and suppressing
-         * this event's default action (which is what stops the browser from starting a text
-         * selection under the pointer) deliberately leaves focus where it was. So a document-level
-         * key listener lives exactly as long as the drag does.
+         * The handle captures the pointer and Escape cancels the drag until it ends — the DOM work
+         * is expression-drag.js's. Suppressing this event's default action (which is what stops
+         * the browser from starting a text selection under the pointer) deliberately leaves focus
+         * where it was, which is why Escape needs a listener of its own.
          *
          * A drag can only start on a handle — the handles are the only elements carrying these
          * bindings — and only from the primary button, so a right-click on a handle opens the
          * context menu instead of picking the node up.
          *
-         * Two constraints on what these handlers may read. Knockout registers event handlers
-         * through jQuery when it is present (it is, in adminhtml), so the object handed over is
-         * jQuery's wrapper, not the native event: only the properties jQuery normalises exist here,
-         * which is why the button is tested through `button` rather than `isPrimary`. And the
-         * Escape listener deliberately neither stops propagation nor suppresses the default action —
-         * cancelling a drag is not a reason to swallow a keystroke the rest of the page may also
-         * have a use for.
+         * Knockout registers event handlers through jQuery when it is present (it is, in
+         * adminhtml), so the object handed over is jQuery's wrapper, not the native event: only the
+         * properties jQuery normalises exist here, which is why the button is tested through
+         * `button` rather than `isPrimary`.
          *
          * @param {Object} node Row or group view-model the handle belongs to.
          * @param {Event} event The pointerdown event.
@@ -4222,18 +3848,9 @@ define([
             }
             this.dragNode(node);
             this.dropTarget(null);
-            this._dragHandle = handle;
-            this._dragPointerId = event.pointerId === undefined ? null : event.pointerId;
-
-            if (this._dragPointerId !== null && typeof handle.setPointerCapture === 'function') {
-                handle.setPointerCapture(this._dragPointerId);
-            }
-            this._dragEscapeHandler = function (keyEvent) {
-                if (keyEvent && keyEvent.key === 'Escape') {
-                    self.cancelDrag();
-                }
-            };
-            document.addEventListener('keydown', this._dragEscapeHandler, true);
+            this._drag.start(handle, event.pointerId === undefined ? null : event.pointerId, function () {
+                self.cancelDrag();
+            });
 
             return false;
         },
@@ -4306,35 +3923,16 @@ define([
         },
 
         /**
-         * Drops every trace of a running drag: the node, the indicator, the Escape listener and the
-         * pointer capture.
-         *
-         * The capture is released only when this element still holds it — releasing a capture that
-         * has already lapsed throws, and by the time an interrupted drag reaches here it usually
-         * has.
+         * Drops every trace of a running drag: the node and the indicator here, the Escape
+         * listener and the pointer capture in expression-drag.js. Idempotent, so destroy() can call
+         * it whether or not a drag is running.
          *
          * @returns {void}
          */
         _releaseDrag: function () {
-            var handle = this._dragHandle;
-            var pointerId = this._dragPointerId;
-
             this.dragNode(null);
             this.dropTarget(null);
-
-            if (this._dragEscapeHandler !== null) {
-                document.removeEventListener('keydown', this._dragEscapeHandler, true);
-                this._dragEscapeHandler = null;
-            }
-            this._dragHandle = null;
-            this._dragPointerId = null;
-
-            if (handle !== null && pointerId !== null
-                && typeof handle.hasPointerCapture === 'function'
-                && typeof handle.releasePointerCapture === 'function'
-                && handle.hasPointerCapture(pointerId)) {
-                handle.releasePointerCapture(pointerId);
-            }
+            this._drag.release();
         },
 
         /**
@@ -4342,11 +3940,9 @@ define([
          *
          * A position outside the builder's own box marks nothing: the indicator disappears, which
          * is both the feedback that releasing here does nothing and the mechanism that makes it so.
-         * Inside, the nearest slot by vertical distance wins — the layout is a single column, so a
-         * gap is a y coordinate — and the FIRST of two equally near slots wins, which in the
-         * depth-first slot order is the outer one. Nested groups carry a header and a footer, so
-         * the gap just inside a group and the gap just before it are a whole chrome row apart and
-         * never actually tie.
+         * Inside, the nearest gap wins (expression-reorder nearestSlot()). Nested groups carry a
+         * header and a footer, so the gap just inside a group and the gap just before it are a whole
+         * chrome row apart and never actually tie.
          *
          * The observable is written only when the slot really changed, so dragging across one row
          * re-renders the indicator once instead of once per pointer event.
@@ -4357,19 +3953,9 @@ define([
          */
         _updateDropTarget: function (clientX, clientY) {
             var current = this.dropTarget();
-            var nearest = null;
-            var nearestDistance = 0;
-
-            if (this._pointerInsideBuilder(clientX, clientY)) {
-                _.each(this._dropCandidates(this.dragNode()), function (candidate) {
-                    var distance = Math.abs(candidate.y - clientY);
-
-                    if (nearest === null || distance < nearestDistance) {
-                        nearest = candidate;
-                        nearestDistance = distance;
-                    }
-                });
-            }
+            var nearest = this._pointerInsideBuilder(clientX, clientY)
+                ? expressionReorder.nearestSlot(this._dropCandidates(this.dragNode()), clientY)
+                : null;
 
             if (nearest === null) {
                 if (current !== null) {
@@ -4379,23 +3965,15 @@ define([
                 return;
             }
 
-            if (current !== null && current.group === nearest.group && current.index === nearest.index) {
+            if (expressionReorder.sameSlot(current, nearest)) {
                 return;
             }
             this.dropTarget({group: nearest.group, index: nearest.index});
         },
 
         /**
-         * The slots a drag may drop the node into, each with the y coordinate of its gap.
-         *
-         * The two slots directly around the node are left out: dropping there rearranges nothing,
-         * so offering them would show an indicator that promises a change and then announce a move
-         * that never happened. The pure model deliberately leaves that call to the caller, and the
-         * keyboard walk skips the same two.
-         *
-         * Slots that would nest the node past the depth cap are left out the same way: not being a
-         * candidate IS the feedback — no indicator appears over them, so releasing there drops the
-         * node nowhere rather than into a shape the save would refuse.
+         * The slots a drag may drop the node into (expression-reorder dropSlots()), each with the
+         * y coordinate of its gap on screen.
          *
          * Re-measured on every pointer move rather than cached at drag start, because the layout
          * genuinely moves under a drag: the page scrolls, a row's open dropdown closes, a long pill
@@ -4407,41 +3985,25 @@ define([
          * @returns {Array.<{group: Object, index: Number, y: Number}>}
          */
         _dropCandidates: function (node) {
+            var self = this;
             var walk = this._slotWalk(node);
-            var candidates = [];
 
             if (walk === null) {
-                return candidates;
+                return [];
             }
-            _.each(walk.slots, function (slot, index) {
-                var anchor;
 
-                if (index === walk.before || index === walk.before + 1) {
-                    return;
-                }
-
-                if (!this._slotFits(slot.path, node)) {
-                    return;
-                }
-                anchor = this._slotAnchor(slot.path);
-
-                if (anchor !== null) {
-                    candidates.push(anchor);
-                }
-            }, this);
-
-            return candidates;
+            return expressionReorder.dropSlots(walk, this._heightOf(node), this.maxGroupDepth)
+                .map(function (slot) {
+                    return self._slotAnchor(slot.path);
+                })
+                .filter(function (anchor) {
+                    return anchor !== null;
+                });
         },
 
         /**
-         * The node's insertion slots, and where the node itself sits among them.
-         *
-         * The slot list comes from the pure model over an index-faithful projection of the
-         * view-model tree, minus the slots inside the node's own subtree — a node cannot move into
-         * itself. `before` is the position of the gap directly above the node, which is the slot
-         * whose path IS the node's path; the gap directly below it is always the next entry, since
-         * everything that would sit between them lies inside the node and has just been filtered
-         * out. Those two are the anchors both the drag and the keyboard walk measure from.
+         * The node's insertion slots and where the node itself sits among them
+         * (expression-reorder slotWalk()), over an index-faithful projection of the view-model tree.
          *
          * @param {Object} node Row or group view-model.
          * @returns {{slots: Array.<{path: Array.<Number>}>, before: Number}|null} null when the
@@ -4449,34 +4011,17 @@ define([
          */
         _slotWalk: function (node) {
             var path = this.findPath(node);
-            var slots;
-            var before = -1;
 
-            if (path === null) {
-                return null;
-            }
-            slots = expressionTree.excludeSubtree(
-                expressionTree.slotList(this._structureModelFromVm(this.rootGroup())),
-                path
-            );
-            _.each(slots, function (slot, index) {
-                if (before === -1 && this._samePath(slot.path, path)) {
-                    before = index;
-                }
-            }, this);
-
-            return before === -1 ? null : {slots: slots, before: before};
+            return path === null
+                ? null
+                : expressionReorder.slotWalk(this._structureModelFromVm(this.rootGroup()), path);
         },
 
         /**
-         * Resolves one slot path to the group it inserts into, the index inside it, and the y
-         * coordinate of the gap on screen.
-         *
-         * The gap above child i is that child's top edge; the gap after the last child is its
-         * bottom edge. An empty group has no child to measure at all, so its add-condition button
-         * stands in — it is the first thing below where a first child would appear, and it exists
-         * in every group. A node whose element cannot be found yields null and simply drops out of
-         * the candidate list rather than contributing a bogus coordinate.
+         * Resolves one slot path to the group it inserts into, the index inside it, and the y coordinate
+         * of the gap on screen, measured where expression-reorder slotAnchor() says. A node whose element
+         * cannot be found yields null and drops out of the candidate list rather than contributing a bogus
+         * coordinate.
          *
          * @param {Array.<Number>} slotPath Receiving group path plus insertion index.
          * @returns {{group: Object, index: Number, y: Number}|null}
@@ -4484,28 +4029,16 @@ define([
         _slotAnchor: function (slotPath) {
             var group = this._groupAtPath(slotPath.slice(0, -1));
             var index = slotPath[slotPath.length - 1];
-            var children;
+            var anchor;
             var rect;
 
             if (group === null) {
                 return null;
             }
-            children = group.children();
+            anchor = expressionReorder.slotAnchor(index, group.children().length);
+            rect = this._drag.measure(SLOT_ANCHOR_IDS[anchor.element](this, group, anchor));
 
-            if (index < children.length) {
-                rect = this._rectOf(this.nodeDomId(children[index]));
-
-                return rect === null ? null : {group: group, index: index, y: rect.top};
-            }
-
-            if (children.length > 0) {
-                rect = this._rectOf(this.nodeDomId(children[children.length - 1]));
-
-                return rect === null ? null : {group: group, index: index, y: rect.bottom};
-            }
-            rect = this._rectOf(this.groupAddDomId(group));
-
-            return rect === null ? null : {group: group, index: index, y: rect.top};
+            return rect === null ? null : {group: group, index: index, y: rect[anchor.edge]};
         },
 
         /**
@@ -4521,49 +4054,34 @@ define([
          * @returns {Boolean}
          */
         _pointerInsideBuilder: function (clientX, clientY) {
-            var rect = this._rectOf(this.nodeDomId(this.rootGroup()));
-
-            return rect !== null
-                && clientX >= rect.left && clientX <= rect.right
-                && clientY >= rect.top && clientY <= rect.bottom;
-        },
-
-        /**
-         * Bounding box of a rendered element, or null when it is not on the page.
-         *
-         * @param {String} domId Id of the element to measure.
-         * @returns {Object|null} The element's DOMRect.
-         */
-        _rectOf: function (domId) {
-            var element = document.getElementById(domId);
-
-            return element && typeof element.getBoundingClientRect === 'function'
-                ? element.getBoundingClientRect()
-                : null;
+            return expressionReorder.insideBox(
+                this._drag.measure(this.nodeDomId(this.rootGroup())),
+                clientX,
+                clientY
+            );
         },
 
         /**
          * Moves a node one insertion slot up or down from a focused drag handle — the keyboard's
          * whole share of reordering, and the only one an admin who cannot use a pointer has.
          *
-         * The walk is the same slot list the drag measures, and it steps OVER the two slots around
-         * the node, so one keystroke is always exactly one visible change: within a group the node
-         * swaps with its neighbour, and at a group's edge the next slot is inside (or outside) the
-         * adjacent group, so repeated presses walk into and out of nested groups. At either end of
-         * the list there is no next slot and nothing happens — the key is still consumed, because a
-         * handle is not a place where scrolling the page is the expected answer to an arrow key.
+         * One keystroke is always exactly one visible change (expression-reorder stepSlot()): within
+         * a group the node swaps with its neighbour, and at a group's edge repeated presses walk into
+         * and out of nested groups. At either end of the list nothing happens — the key is still
+         * consumed, because a handle is not a place where scrolling the page is the expected answer
+         * to an arrow key.
          *
          * @param {Object} node Row or group view-model the handle belongs to.
          * @param {Event} event The keydown event.
          * @returns {Boolean} true to let the browser act on the key, false when it was consumed.
          */
         handleDragKeydown: function (node, event) {
-            var key = this._keyName(event);
+            var step = expressionReorder.stepForKey(expressionListbox.keyName(event));
             var walk;
             var slot;
             var group;
 
-            if (key !== 'ArrowUp' && key !== 'ArrowDown') {
+            if (step === 0) {
                 return true;
             }
             walk = this._slotWalk(node);
@@ -4571,7 +4089,7 @@ define([
             if (walk === null) {
                 return false;
             }
-            slot = this._stepSlot(walk, node, key === 'ArrowUp' ? -1 : 1);
+            slot = expressionReorder.stepSlot(walk, step, this._heightOf(node), this.maxGroupDepth);
 
             if (slot === null) {
                 return false;
@@ -4586,54 +4104,22 @@ define([
         },
 
         /**
-         * The next slot in one direction that the node may actually be moved into.
-         *
-         * Starts one slot beyond the pair describing the node's current placement and keeps going
-         * while slots refused by the depth cap turn up, so a keystroke lands on the next REACHABLE
-         * gap instead of dead-ending on an unusable one: one keystroke stays one visible change,
-         * and a subtree too tall for a nested group simply passes over it. Running out of slots
-         * yields null — the key is consumed and nothing moves, which is also what a node with no
-         * reachable slot at all gets in both directions.
-         *
-         * @param {{slots: Array.<{path: Array.<Number>}>, before: Number}} walk Slot walk of the node.
-         * @param {Object} node Row or group view-model being moved.
-         * @param {Number} step -1 towards the start of the list, +1 towards its end.
-         * @returns {{path: Array.<Number>}|null}
-         */
-        _stepSlot: function (walk, node, step) {
-            var index = step < 0 ? walk.before - 1 : walk.before + 2;
-
-            while (walk.slots[index] !== undefined) {
-                if (this._slotFits(walk.slots[index].path, node)) {
-                    return walk.slots[index];
-                }
-                index += step;
-            }
-
-            return null;
-        },
-
-        /**
          * Moves one node into a group's insertion slot — the single application path for every
          * reorder, pointer drop and keystroke alike.
          *
          * The pure model decides whether the move is legal: it is asked first, over an
          * index-faithful projection of the view-model tree, and a refusal (a slot inside the moved
          * node's own subtree, a path out of range) leaves the tree untouched. Only then are the two
-         * splices applied to the observable arrays, with the same insertion index the model used —
-         * a move within one group compensates for the removal shift, so the slot index keeps
-         * meaning "the gap you saw" rather than "the gap after removal". The two writes are
-         * separate notifications, which nothing observes: the autosave and count computeds are both
-         * deferred, so they see the finished tree once.
+         * splices applied to the observable arrays, with the same insertion index the model used.
+         * The two writes are separate notifications, which nothing observes: the autosave and count
+         * computeds are both deferred, so they see the finished tree once.
          *
          * Aggregators are never involved. They belong to groups, which a move only ever reorders,
          * so the logic around a moved node reads exactly as it did before.
          *
-         * The depth cap is re-checked here rather than trusted from the caller. Both callers already
-         * filter their slots — that is where the cap becomes UX, since a slot that is not offered
-         * needs no explanation — but being the single application path makes this the one place where
-         * "no reorder may nest past the cap" can be a fact rather than a convention every future
-         * caller has to remember.
+         * The depth cap is re-checked here rather than trusted from the caller, which makes "no
+         * reorder may nest past the cap" a fact of this single application path rather than a
+         * convention every future caller has to remember.
          *
          * @param {Object} node Row or group view-model to move.
          * @param {Object} targetGroup Group view-model receiving the node.
@@ -4646,7 +4132,6 @@ define([
             var groupPath = this._pathOfGroup(targetGroup);
             var sourceGroup = this.findParentOf(node);
             var fromIndex;
-            var insertIndex;
 
             if (fromPath === null || groupPath === null || sourceGroup === null) {
                 return false;
@@ -4664,9 +4149,12 @@ define([
                 return false;
             }
             fromIndex = fromPath[fromPath.length - 1];
-            insertIndex = targetGroup === sourceGroup && slotIndex > fromIndex ? slotIndex - 1 : slotIndex;
             sourceGroup.children.splice(fromIndex, 1);
-            targetGroup.children.splice(insertIndex, 0, node);
+            targetGroup.children.splice(
+                expressionReorder.insertIndex(targetGroup === sourceGroup, slotIndex, fromIndex),
+                0,
+                node
+            );
             this._announceMove(node);
             this._focusLater(this.dragHandleDomId(node));
 
@@ -4674,28 +4162,24 @@ define([
         },
 
         /**
-         * Reports where a node ended up, for the reorder live region.
-         *
-         * Counted in insertion slots rather than in siblings, because that is what a move actually
-         * walks: a node crossing into a nested group moves one slot, not one sibling. The total is
-         * one less than the number of slots the node can address, since the two slots around the
-         * node describe the SAME placement — its current one — which makes the last position
-         * reachable and the total stable across every move (a move never changes how many slots a
-         * tree has).
+         * Reports where a node ended up, for the reorder live region — counted in insertion slots
+         * (expression-reorder placeOf()).
          *
          * @param {Object} node Row or group view-model that has just moved.
          * @returns {void}
          */
         _announceMove: function (node) {
             var walk = this._slotWalk(node);
+            var place;
 
             if (walk === null) {
                 return;
             }
+            place = expressionReorder.placeOf(walk);
             this.moveAnnouncement(
                 $t('Moved to position %1 of %2')
-                    .replace('%1', walk.before + 1)
-                    .replace('%2', walk.slots.length - 1)
+                    .replace('%1', place.position)
+                    .replace('%2', place.total)
             );
         },
 
@@ -4725,6 +4209,22 @@ define([
             }, this);
 
             return {kind: 'group', aggregator: groupVm.aggregator(), children: children};
+        },
+
+        /**
+         * The bare shape of a node — groups and their children, nothing else — for questions about
+         * size and nesting. It reads only the children observables, so a binding asking how many
+         * conditions a rule holds does not also depend on every group's aggregator.
+         *
+         * @param {Object} node Row or group view-model.
+         * @returns {Object} A condition node, or a group node with shaped children.
+         */
+        _shapeOf: function (node) {
+            if (node.kind !== 'group') {
+                return {kind: 'condition'};
+            }
+
+            return {kind: 'group', children: _.map(node.children(), this._shapeOf, this)};
         },
 
         /**
@@ -4760,46 +4260,17 @@ define([
             return current;
         },
 
-        /**
-         * True when two child-index paths address the same node.
-         *
-         * @param {Array.<Number>} left
-         * @param {Array.<Number>} right
-         * @returns {Boolean}
-         */
-        _samePath: function (left, right) {
-            return left.length === right.length && _.every(left, function (index, at) {
-                return index === right[at];
-            });
-        },
-
         /* ---------------- (de)serialisation ---------------- */
 
         /**
-         * Hydrates the view-model tree from the field value.
+         * Hydrates the view-model tree from the field value (expression-tree modelFromStoredValue()). A
+         * stored leaf whose condition type resolves to no configured field is skipped; a group left empty by
+         * such skips is kept — it is authoring state, and an empty group serialises to nothing anyway.
          *
-         * Malformed JSON or a non-tree value yields an empty root group. A stored leaf whose
-         * condition type resolves to no configured field is skipped; a group left empty by such
-         * skips is kept — it is authoring state, and an empty group serialises to nothing anyway.
+         * @returns {void}
          */
         _loadFromValue: function () {
-            var raw = this.value();
-            var model = {kind: 'group', aggregator: 'all', children: []};
-            var tree = null;
-
-            if (raw) {
-                try {
-                    tree = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                } catch (e) {
-                    tree = null;
-                }
-            }
-
-            if (tree) {
-                model = expressionTree.treeToModel(tree, this.combineType);
-            }
-
-            this.rootGroup(this._vmFromModel(model));
+            this.rootGroup(this._vmFromModel(expressionTree.modelFromStoredValue(this.value(), this.combineType)));
         },
 
         /**
@@ -4833,38 +4304,20 @@ define([
 
         /**
          * Builds a condition-row view-model from a stored leaf condition, or null when the
-         * condition's type matches no configured field.
+         * condition's type matches no configured field (expression-condition rowSeed()).
          *
          * @param {Object} cond Stored leaf condition object.
          * @returns {Object|null}
          */
         _rowFromCondition: function (cond) {
-            if (!cond || !cond.type) {
-                return null;
-            }
-            var type = cond.type;
-            var fieldType = type;
-            var productAttribute = '';
-            var pickerField = _.find(this.fields, function (f) { return f.type === PRODUCT_ATTRIBUTE_PICKER; });
-            if (pickerField && type === pickerField.childType) {
-                fieldType = PRODUCT_ATTRIBUTE_PICKER;
-                productAttribute = cond.attribute || '';
-            }
+            var seed = expressionCondition.rowSeed(cond, this.fields, this.fieldsByType);
 
-            if (!this.fieldsByType[fieldType]) {
-                return null;
-            }
-
-            return this._buildRow(this.fieldsByType[fieldType], {
-                operator: cond.operator,
-                value: cond.value,
-                productAttribute: productAttribute,
-                isValueProcessed: cond.is_value_processed
-            });
+            return seed === null ? null : this._buildRow(seed.field, seed.overrides);
         },
 
         /**
-         * Creates a condition-row view-model.
+         * Creates a condition-row view-model in the state expression-condition initialState()
+         * describes, its value then shaped for the operators the row offers.
          *
          * The `kind` discriminator is a plain string, not an observable — the template dispatches
          * on it once per rendered node and a node never changes kind.
@@ -4875,40 +4328,29 @@ define([
          * @returns {Object}
          */
         _buildRow: function (field, overrides) {
-            overrides = overrides || {};
-            var fieldType = field ? field.type : (this.fields[0] && this.fields[0].type);
-            var operator = overrides.operator || (field && field.operators && field.operators.length ? field.operators[0].value : '==');
-            var value = overrides.value !== undefined && overrides.value !== null
-                ? overrides.value
-                : this._defaultValueForField(field);
-            var productAttribute = overrides.productAttribute || (field && field.attributes && field.attributes.length ? field.attributes[0].value : '');
-            // A clone hands its source's retained number over directly; every other caller lets the
-            // loaded value speak for itself. ONE test decides, so both routes agree by construction.
-            var storedNumber = overrides.storedNumber !== undefined ? overrides.storedNumber : overrides.value;
+            var state = expressionCondition.initialState(field, overrides, expressionFields.defaultFieldType(this.fields));
             var row = {
                 kind: 'condition',
                 id: ++rowSeq,
-                fieldType: ko.observable(fieldType),
-                operator: ko.observable(operator),
+                fieldType: ko.observable(state.fieldType),
+                operator: ko.observable(state.operator),
                 // Shaped below, once the row can say which operators it offers: a picker row's
                 // attribute may carry its own operator set, and its `list` flags decide the shape.
-                value: ko.observable(value),
-                productAttribute: ko.observable(productAttribute),
+                value: ko.observable(state.value),
+                productAttribute: ko.observable(state.productAttribute),
                 // Whatever the loaded leaf carried in `is_value_processed`, kept verbatim so the
                 // serialiser can write it back unchanged; a row the admin adds carries null. A plain
                 // property, not an observable: authoring never changes it, and it is meaningless to
                 // this component — the flag is an artefact of how the PHP rule framework
                 // (de)serialises a condition, and re-emitting the value that came in is what keeps a
-                // load → save cycle byte-identical. Explicitly `undefined`-checked so a stored
-                // `false` survives.
-                isValueProcessed: overrides.isValueProcessed === undefined ? null : overrides.isValueProcessed,
+                // load → save cycle byte-identical.
+                isValueProcessed: state.isValueProcessed,
                 // The stored value when it arrived as a JSON number rather than a string, else null.
                 // A rule saved by PHP can come back that way: the rule framework pushes the value of a
                 // decimal-backed attribute through a locale number parse on load, so a `100` an editor
                 // typed is re-encoded unquoted. Remembering the number lets the serialiser write back
-                // the shape it read (see _conditionFromRow) instead of re-quoting it and dirtying the
-                // form on open.
-                storedNumber: typeof storedNumber === 'number' ? storedNumber : null,
+                // the shape it read instead of re-quoting it and dirtying the form on open.
+                storedNumber: state.storedNumber,
                 searchText: ko.observable(''),
                 // Query of whichever searchable single-select the row hosts — kept apart from
                 // searchText, which belongs to the value editor. They are different questions asked
@@ -4950,7 +4392,7 @@ define([
                 _pasteTimer: null
             };
 
-            row.value(expressionValue.normaliseValueIn(field, operator, value, this.operatorsFor(row)));
+            row.value(expressionValue.normaliseValueIn(field, state.operator, state.value, this.operatorsFor(row)));
 
             return row;
         },
@@ -4965,43 +4407,22 @@ define([
             return {
                 kind: 'group',
                 id: ++rowSeq,
-                aggregator: ko.observable(aggregator === 'any' ? 'any' : 'all'),
+                aggregator: ko.observable(expressionTree.normaliseAggregator(aggregator)),
                 children: ko.observableArray([])
             };
         },
 
-        _defaultValueForField: function (field) {
-            if (!field) {
-                return '';
-            }
-            if (field.valueType === 'multiselect') {
-                return [];
-            }
-            if (field.valueType === 'select' && field.options && field.options.length) {
-                return field.options[0].value;
-            }
-            return '';
-        },
-
         /**
-         * Serialises the authored tree into the field value.
+         * Serialises the authored tree into the field value (expression-tree serialiseModel()).
          *
-         * The recursive view-model walk produces the tree module's plain group model, the module
-         * renders it in the frozen Combine shape, and a root left without any conditions maps to
-         * '' — the field's "no rule" value. The walk reads the root observable, every group's
-         * aggregator and children and every row's field/operator/value/attribute observables, which
-         * is what lets the autosave computed react to edits at any depth.
+         * The walk reads the root observable, every group's aggregator and children and every row's
+         * field/operator/value/attribute observables, which is what lets the autosave computed react to edits
+         * at any depth.
          *
          * @returns {String} JSON condition tree, or '' when nothing serialises.
          */
         serialise: function () {
-            var tree = expressionTree.modelToTree(this._modelFromVm(this.rootGroup()), this.combineType);
-
-            if (!tree.conditions || tree.conditions.length === 0) {
-                return '';
-            }
-
-            return JSON.stringify(tree);
+            return expressionTree.serialiseModel(this._modelFromVm(this.rootGroup()), this.combineType);
         },
 
         /**
@@ -5032,63 +4453,40 @@ define([
         },
 
         /**
-         * Serialises one condition row into a stored leaf, or null when its field is not configured.
-         *
-         * The property ORDER is load-bearing — type, attribute, operator, value, is_value_processed —
-         * because the field value is produced by JSON.stringify and an unchanged rule must come back
-         * out byte-identical. `is_value_processed` is echoed from what the row was loaded with rather
-         * than hardcoded: the PHP rule framework writes that key from a flag it reads back under a
-         * DIFFERENT name, so a leaf that has ever round-tripped through PHP is stored with `false`
-         * where a freshly authored one carries null. Emitting a constant would make every such rule
-         * dirty the instant its form opened.
-         *
-         * A value that arrived UNQUOTED is written back unquoted for the same reason — the rule
-         * framework re-encodes the value of a decimal-backed attribute as a JSON number. The
-         * restoration is deliberately narrow: only when the row still holds exactly that number, judged
-         * by comparing string forms, so the first real edit falls straight back to the string shape and
-         * no state has to be invalidated by hand.
+         * Serialises one condition row into a stored leaf in the frozen shape, or null when its field
+         * is not configured (expression-condition toLeaf()).
          *
          * @param {Object} row Row view-model.
          * @returns {Object|null} Leaf condition in the frozen shape, or null.
          */
         _conditionFromRow: function (row) {
+            var self = this;
             var fieldType = row.fieldType();
-            var field = this.fieldsByType[fieldType];
-            if (!field) {
-                return null;
-            }
-            var op = row.operator();
-            var rawValue = row.value();
-            var value = expressionValue.serialiseValueOut(field, op, rawValue, this.operatorsFor(row));
 
-            if (row.storedNumber !== null && String(row.storedNumber) === value) {
-                value = row.storedNumber;
-            }
-
-            if (fieldType === PRODUCT_ATTRIBUTE_PICKER) {
-                return {
-                    type: field.childType,
-                    attribute: row.productAttribute(),
-                    operator: op,
-                    value: value,
-                    is_value_processed: row.isValueProcessed
-                };
-            }
-
-            return {
-                type: fieldType,
-                attribute: field.attribute,
-                operator: op,
-                value: value,
-                is_value_processed: row.isValueProcessed
-            };
+            return expressionCondition.rowLeaf(this.fieldsByType[fieldType], fieldType, {
+                operator: function () {
+                    return row.operator();
+                },
+                value: function () {
+                    return row.value();
+                },
+                operators: function () {
+                    return self.operatorsFor(row);
+                },
+                attribute: function () {
+                    return row.productAttribute();
+                },
+                storedNumber: row.storedNumber,
+                isValueProcessed: row.isValueProcessed
+            });
         },
 
         /* ---------------- Live preview ---------------- */
 
         /**
          * Recursive display structure of the authored rule for the structured preview, or null
-         * when nothing renders — the template shows the consumer's empty-state message instead.
+         * when nothing renders — the template shows the consumer's empty-state message instead
+         * (expression-preview previewGroup()).
          *
          * Presentation only: nodes carry ready-to-print token strings resolved through the row
          * label helpers, the template emits every one through a text binding, and nothing here
@@ -5097,248 +4495,73 @@ define([
          * @returns {Object|null} Root preview group node, or null for an empty rule.
          */
         _buildPreviewTree: function () {
-            return this._previewNodeForGroup(this.rootGroup(), true);
-        },
+            var self = this;
 
-        /**
-         * Builds the preview node of one group: renderable children in authoring order, each
-         * carrying the joiner word that precedes it — the group's aggregator word on every child
-         * but the first. Groups with nothing to show collapse to null and are skipped by their
-         * parent, exactly like the serialiser drops them.
-         *
-         * @param {Object} groupVm Group view-model.
-         * @param {Boolean} isRoot True for the root group — the template parenthesises every
-         *     group but the root.
-         * @returns {Object|null} {kind: 'group', root, children} node, or null when empty.
-         */
-        _previewNodeForGroup: function (groupVm, isRoot) {
-            var joiner = groupVm.aggregator() === 'any' ? $t('OR') : $t('AND');
-            var children = [];
-
-            _.each(groupVm.children(), function (child) {
-                var node = child.kind === 'group'
-                    ? this._previewNodeForGroup(child, false)
-                    : this._previewNodeForRow(child);
-
-                if (node) {
-                    node.joiner = children.length > 0 ? joiner : '';
-                    children.push(node);
-                }
-            }, this);
-
-            if (children.length === 0) {
-                return null;
-            }
-
-            return {kind: 'group', root: isRoot, children: children};
+            return expressionPreview.previewGroup(
+                this._structureModelFromVm(this.rootGroup()),
+                function (row) {
+                    return self._previewNodeForRow(row);
+                },
+                {all: $t('AND'), any: $t('OR')},
+                true
+            );
         },
 
         /**
          * Builds the preview node of one condition row: field, operator and value as
-         * ready-to-print token strings. A row whose field is not configured keeps the historic
-         * '?' placeholder as its field token.
+         * ready-to-print token strings, through the row's label helpers
+         * (expression-preview conditionNode()).
          *
          * @param {Object} row Row view-model.
          * @returns {Object} {kind: 'condition', field, operator, value} node.
          */
         _previewNodeForRow: function (row) {
-            var fieldType = row.fieldType();
-            var field = this.fieldsByType[fieldType];
-
-            if (!field) {
-                return {kind: 'condition', field: '?', operator: '', value: ''};
-            }
-
-            return {
-                kind: 'condition',
-                field: fieldType === PRODUCT_ATTRIBUTE_PICKER ? this.labelForProductAttribute(row) : field.label,
-                operator: this.labelForOperator(row),
-                value: this._previewValueFor(row, field)
-            };
-        },
-
-        /**
-         * Renders a row's value as one preview string: selected option labels for list values
-         * (braced, comma-separated), the option's label for single select and optioned-attribute
-         * values, the raw text quoted otherwise.
-         *
-         * @param {Object} row Row view-model.
-         * @param {Object} field Field descriptor of the row.
-         * @returns {String}
-         */
-        _previewValueFor: function (row, field) {
-            var value = row.value();
             var self = this;
-            var labels;
 
-            if (_.isArray(value)) {
-                labels = _.map(value, function (v) {
-                    return self._previewValueLabel(row, field, v);
-                });
-
-                return '{' + labels.join(', ') + '}';
-            }
-
-            if (field.valueType === 'select') {
-                return this.labelForOptionValue(row, value);
-            }
-
-            // The optioned-attribute select uses an options caption, which writes undefined
-            // while unselected — that renders as the quoted empty value, never as a label lookup.
-            if (field.valueType === 'product-attribute' && this.productAttributeHasOptions(row)) {
-                return value === null || value === undefined || value === ''
-                    ? '""'
-                    : this._previewValueLabel(row, field, value);
-            }
-
-            return '"' + (value || '') + '"';
-        },
-
-        /**
-         * Label of one option value in the preview. Values of a product-attribute row resolve
-         * through pathLabelFor, whose index reads the selected attribute's own option list —
-         * the field's option list would be the wrong host there: hierarchical attribute options
-         * (the category picker) render their breadcrumb path, flat ones their label, optionless
-         * ones the raw value. Every other row reads the field options via labelForOptionValue.
-         *
-         * @param {Object} row Row view-model.
-         * @param {Object} field Field descriptor of the row.
-         * @param {*} value One option value.
-         * @returns {String}
-         */
-        _previewValueLabel: function (row, field, value) {
-            if (field.valueType === 'product-attribute') {
-                return this.pathLabelFor(row, value);
-            }
-
-            return this.labelForOptionValue(row, value);
+            return expressionPreview.conditionNode(this.fieldsByType[row.fieldType()], {
+                attributeLabel: function () {
+                    return self.labelForProductAttribute(row);
+                },
+                operatorLabel: function () {
+                    return self.labelForOperator(row);
+                },
+                value: function () {
+                    return row.value();
+                },
+                pathLabel: function (value) {
+                    return self.pathLabelFor(row, value);
+                },
+                optionLabel: function (value) {
+                    return self.labelForOptionValue(row, value);
+                },
+                hasOptions: function () {
+                    return self.productAttributeHasOptions(row);
+                }
+            });
         },
 
         /* ---------------- Validation ---------------- */
 
         /**
-         * Detects rules that can never match, plus rows missing their supporting context.
+         * The rule's warnings — parts that can never match, and rows missing their supporting
+         * context — each prefixed with its group's number when the rule has several groups
+         * (expression-coherence ruleWarnings()). The warning texts are the consumer's.
          *
-         * Contradictions are checked per AND-group over its conjunctive closure — the context
-         * conditions guaranteed by the group's own rows and by nested AND-subgroups:
-         *  - Multiple `context ==` rows with different values (only one context value can hold at a time).
-         *  - `context ==` combined with `context !=` of the same value.
-         *  - `context is one of {…}` combined with `context ==` outside that set.
-         *  - `context is one of` sets with an empty intersection.
-         * Each clash is reported once, at the topmost group jointly guaranteeing it: a group whose
-         * parent is also an AND-group hands the report up, because its closure is part of the
-         * parent's closure.
-         *
-         * Returns an array of human-readable warning strings (empty if the rule is satisfiable).
+         * @returns {Array.<String>} Warning strings, empty when the rule is coherent.
          */
         _validateRule: function () {
-            var warnings = [];
-            var contextFieldType = this._contextFieldType();
-            var model;
-            var groups;
-            var contradictionText;
-
-            if (!contextFieldType) {
-                return warnings;
-            }
-
-            model = this._coherenceModelFromVm(this.rootGroup());
-            groups = expressionTree.groupsWithPaths(model);
-            contradictionText = this.coherence.contradictionWarning;
-
-            if (contradictionText) {
-                _.each(groups, function (entry) {
-                    var contextRows;
-
-                    if (entry.group.aggregator !== 'all') {
-                        return;
-                    }
-
-                    if (entry.path.length > 0 && this._parentAggregatorAt(model, entry.path) === 'all') {
-                        return;
-                    }
-
-                    contextRows = this._contextConditionsIn(
-                        expressionTree.conjunctiveClosure(entry.group),
-                        contextFieldType
-                    );
-
-                    if (contextRows.length < 2) {
-                        return;
-                    }
-
-                    if (expressionTree.solveContradictions(contextRows)) {
-                        warnings.push(this._groupPrefix(entry.number, groups.length) + contradictionText);
-                    }
-                }, this);
-            }
-
-            return warnings.concat(this._validateOrphanedDependencies(model, groups));
-        },
-
-        /**
-         * Catches rows that need a supporting context condition but have none in their conjunctive
-         * scope. Typical breakage: the user changes the context row's field, orphaning dependent
-         * rows; or builds an OR-branch with a dependent row but no context filter to anchor it.
-         *
-         * A row is dependent when a `coherence.requirements` entry matches its field's type or
-         * attribute — the same lookup that gates the field dropdown. Each group's direct rows are
-         * checked with their own scope, so OR-joined branches don't borrow each other's context
-         * rules while AND-ancestors legitimately share theirs. At most one warning per requirement
-         * key per group; a requirement without warning text gates the dropdown but reports nothing.
-         *
-         * @param {Object} model Plain group model from _coherenceModelFromVm().
-         * @param {Array.<Object>} groups groupsWithPaths() entries for `model`.
-         * @returns {Array.<String>} Warning strings.
-         */
-        _validateOrphanedDependencies: function (model, groups) {
-            var warnings = [];
-            var requirements = this.coherence.requirements || {};
             var self = this;
 
-            _.each(groups, function (entry) {
-                var prefix = self._groupPrefix(entry.number, groups.length);
-                var warnedKeys = {};
-
-                _.each(entry.group.children, function (child, idx) {
-                    var field;
-                    var key;
-                    var requirement;
-                    var scope;
-
-                    if (child.kind !== 'condition') {
-                        return;
-                    }
-
-                    field = self.fieldsByType[child.condition.fieldType];
-
-                    if (!field) {
-                        return;
-                    }
-
-                    key = requirements[field.type] ? field.type
-                        : requirements[field.attribute] ? field.attribute : null;
-
-                    if (key === null || warnedKeys[key]) {
-                        return;
-                    }
-
-                    requirement = requirements[key];
-
-                    if (!requirement.warning || !requirement.contexts || !requirement.contexts.length) {
-                        return;
-                    }
-
-                    scope = expressionTree.conjunctiveScope(model, entry.path.concat([idx]));
-
-                    if (!self._scopeSatisfies(scope, requirement.contexts)) {
-                        warnings.push(prefix + requirement.warning);
-                        warnedKeys[key] = true;
-                    }
-                });
+            return _.map(expressionCoherence.ruleWarnings(
+                function () {
+                    return self._coherenceModelFromVm(self.rootGroup());
+                },
+                this.fields,
+                this.fieldsByType,
+                this.coherence
+            ), function (warning) {
+                return (warning.group === null ? '' : $t('Group %1: ').replace('%1', warning.group)) + warning.text;
             });
-
-            return warnings;
         },
 
         /**
@@ -5373,71 +4596,49 @@ define([
             return {kind: 'group', aggregator: groupVm.aggregator(), children: children};
         },
 
-        /**
-         * Filters closure conditions down to the context field's operator/value pairs, the shape
-         * the tree module's satisfiability check takes.
-         *
-         * @param {Array.<Object>} closure Condition nodes from conjunctiveClosure().
-         * @param {String} contextFieldType Field type of the context field.
-         * @returns {Array.<{operator: String, value: *}>}
-         */
-        _contextConditionsIn: function (closure, contextFieldType) {
-            var rows = [];
-
-            _.each(closure, function (node) {
-                if (node.condition.fieldType === contextFieldType) {
-                    rows.push({operator: node.condition.operator, value: node.condition.value});
-                }
-            });
-
-            return rows;
-        },
+        /* ---------------- Requests ---------------- */
 
         /**
-         * Aggregator of the group containing the group addressed by `path`.
+         * Sends one request to a consumer's endpoint and hands its decoded answer to onAnswer —
+         * unless the request was aborted in the meantime, in which case nothing is handed on.
          *
-         * @param {Object} model Plain root group.
-         * @param {Array.<Number>} path Non-empty path of a group inside `model`.
-         * @returns {String} 'all' or 'any'.
-         */
-        _parentAggregatorAt: function (model, path) {
-            var current = model;
-            var i;
-
-            for (i = 0; i < path.length - 1; i++) {
-                current = current.children[path[i]];
-            }
-
-            return current.aggregator;
-        },
-
-        /**
-         * Warning prefix naming a group by its depth-first number — only when the tree has more
-         * than one group to point at.
+         * The request starts under a key naming what it answers for, so a newer request under the
+         * same key aborts this one, destroy() aborts it, and its deadline aborts it when the
+         * endpoint does not answer in time (expression-requests.js). Of those, only the deadline
+         * still reaches onAnswer: as a failure, so the caller shows its failure state rather than
+         * loading for good. Every failure arrives the same way, as null — a refused status, a body
+         * that is not JSON, a network error, the deadline — and the readers in the pure modules
+         * read null as "no usable answer".
          *
-         * @param {Number} number 1-based depth-first group number.
-         * @param {Number} totalGroups Total number of groups in the model.
-         * @returns {String}
-         */
-        _groupPrefix: function (number, totalGroups) {
-            return totalGroups > 1 ? $t('Group %1: ').replace('%1', number) : '';
-        },
-
-        /**
-         * Field type of the configured context field — the field whose conditions define a node's
-         * conjunctive context. Resolved from `coherence.contextAttribute` against the configured
-         * fields; null when no context attribute is configured or no field carries it, which
-         * disables every coherence warning.
+         * The request is sent with the admin session's cookies and marked as an AJAX request,
+         * which is what the adminhtml endpoints expect.
          *
-         * @returns {String|null}
+         * @param {String} key What the request answers for: 'count', 'suggest:<row id>' or
+         *     'options:<attribute code>'.
+         * @param {String} url Endpoint URL, query included.
+         * @param {Object} init Extra fetch options: the method and body of a POST, nothing for a GET.
+         * @param {function(*): void} onAnswer Receives the decoded answer, or null on any failure.
+         * @returns {Promise} Settles once the answer has been handed on or dropped.
          */
-        _contextFieldType: function () {
-            var attribute = this.coherence.contextAttribute;
-            if (!attribute) {
-                return null;
-            }
-            var f = _.find(this.fields, function (f) { return f.attribute === attribute; });
-            return f ? f.type : null;
+        _requestJson: function (key, url, init, onAnswer) {
+            var ticket = this._requests.start(key);
+
+            return window.fetch(url, _.extend({
+                credentials: 'same-origin',
+                headers: {'X-Requested-With': 'XMLHttpRequest'},
+                signal: ticket.signal
+            }, init))
+                .then(function (response) {
+                    return response.ok ? response.json() : null;
+                })
+                .catch(function () {
+                    return null;
+                })
+                .then(function (data) {
+                    if (ticket.settle()) {
+                        onAnswer(data);
+                    }
+                });
         },
 
         /* ---------------- Match count ---------------- */
@@ -5466,7 +4667,7 @@ define([
         _bindMatchCount: function () {
             var self = this;
 
-            if (this.countUrl === '') {
+            if (!expressionCount.countsMatches(this.countUrl)) {
                 return;
             }
             this._disposable(ko.computed(function () {
@@ -5477,51 +4678,36 @@ define([
         /**
          * Debounces one count request for a serialised tree, and invalidates everything older.
          *
-         * The sequence bump is the invalidation: it retires both the pending timer and any request
-         * already in flight, so a number that describes a superseded tree can neither be requested
-         * nor rendered. The badge drops to 'loading' immediately rather than at request time —
-         * keeping the previous number on screen through the debounce window would state a count for
-         * a rule that no longer exists.
-         *
-         * An empty tree short-circuits: an empty rule is not a question this component can ask.
-         * Consumers disagree on what "no conditions" selects (see the empty-state message), the
-         * endpoint contract treats a count request for it as an error, and a fresh row would
-         * otherwise open on "Count unavailable" — so it resolves locally to 'idle' and no request
-         * is made.
-         *
-         * A tree identical to the one the current state already describes is ignored outright. Not
-         * every notification means the rule changed: an observable holding an array notifies on
-         * every write, equal contents included, and several of the row's edits rewrite the value
-         * wholesale. Without this an unchanged rule would cost a request and, worse, throw a
-         * settled number back to 'loading' — a badge flickering over an untouched rule.
+         * What the new tree asks of the badge is expression-count planCount()'s answer. Any new
+         * answer retires both the pending timer and the request already in flight, so a number
+         * that describes a superseded tree can neither be requested nor rendered — an empty tree
+         * too, which settles on idle without asking anything.
          *
          * @param {String} serialised The serialised condition tree, '' when nothing serialises.
          * @returns {void}
          */
         _scheduleCount: function (serialised) {
             var self = this;
-            var seq;
+            var plan = expressionCount.planCount(this._countedTree, serialised);
 
-            if (serialised === this._countedTree) {
+            if (plan === null) {
                 return;
             }
             this._countedTree = serialised;
-            seq = ++this._countSeq;
+            this._requests.cancel('count');
 
             if (this._countTimer) {
                 clearTimeout(this._countTimer);
                 this._countTimer = null;
             }
+            this._setCount(null, false, plan.state);
 
-            if (serialised === '') {
-                this._setCount(seq, null, false, 'idle');
-
+            if (!plan.request) {
                 return;
             }
-            this._setCount(seq, null, false, 'loading');
             this._countTimer = setTimeout(function () {
                 self._countTimer = null;
-                self._requestCount(serialised, seq);
+                self._requestCount(serialised);
             }, this.countDebounce);
         },
 
@@ -5531,89 +4717,47 @@ define([
          * The body is form-encoded because that is what an adminhtml controller reads request
          * params from, and it is handed over as URLSearchParams so the browser sets the matching
          * content type itself — a hand-written header here could only get out of step with the
-         * encoding. The form key rides along as a body param for the same reason: adminhtml
-         * validates POSTs against it, and a request without one is answered with a redirect rather
-         * than JSON.
+         * encoding.
          *
          * Every failure mode ends in the same place. A non-OK status, a body that is not JSON (an
-         * expired session answers with an HTML login page), a rejected fetch and an `{error: true}`
-         * payload all mean one thing to the badge — no count is available — and the endpoint
-         * deliberately sends no reason, so there is nothing more to distinguish.
+         * expired session answers with an HTML login page), a rejected fetch, a request past its
+         * deadline and an `{error: true}` payload all mean one thing to the badge — no count is
+         * available (expression-count readAnswer()).
          *
          * @param {String} serialised The serialised condition tree to count.
-         * @param {Number} seq Sequence id this request answers for.
          * @returns {void}
          */
-        _requestCount: function (serialised, seq) {
+        _requestCount: function (serialised) {
             var self = this;
             var body = new window.URLSearchParams();
 
-            body.append('conditions', serialised);
-            body.append('store_id', String(this.countStoreId));
-            body.append('form_key', this._formKey());
+            expressionCount.requestFields(serialised, this.countStoreId, this._formKey()).forEach(function (pair) {
+                body.append(pair[0], pair[1]);
+            });
 
-            window.fetch(this.countUrl, {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: {'X-Requested-With': 'XMLHttpRequest'},
-                body: body
-            })
-                .then(function (response) {
-                    return response.ok ? response.json() : null;
-                })
-                .then(function (data) {
-                    self._applyCountResponse(seq, data);
-                })
-                .catch(function () {
-                    self._setCount(seq, null, false, 'error');
-                });
+            this._requestJson('count', this.countUrl, {method: 'POST', body: body}, function (data) {
+                var answer = expressionCount.readAnswer(data);
+
+                self._setCount(answer.count, answer.capped, answer.state);
+            });
         },
 
         /**
-         * Turns one endpoint payload into badge state.
+         * Writes one count outcome — the single write path for all three observables.
          *
-         * Only a payload carrying a usable count reads as a count: the contract's `{count, capped}`
-         * with a count that is a non-negative number (a numeric string is accepted, since the
-         * contract is public and JSON encoders differ on integer types). `{error: true}`, an absent
-         * count, a blank or null count and a count that is not a number all render as unavailable
-         * rather than as a zero — "nothing matches" and "the count could not be produced" are
-         * different statements and must not look alike.
+         * Only a current outcome ever arrives here. Responses can land in any order — a broad
+         * tree's count takes longer than the narrower one the admin typed next — but every new
+         * tree aborts the count request in flight before it writes its own state, and an aborted
+         * request's answer is never handed on (_requestJson), so a late number can neither
+         * overwrite a newer one nor turn a 'loading' badge back into a number for a rule that has
+         * since changed.
          *
-         * @param {Number} seq Sequence id the payload answers for.
-         * @param {Object|null} data Decoded endpoint payload, or null when the response was unusable.
-         * @returns {void}
-         */
-        _applyCountResponse: function (seq, data) {
-            var raw = data ? data.count : null;
-            var count = raw === null || raw === undefined || raw === '' ? NaN : Number(raw);
-
-            if (!data || data.error === true || !isFinite(count) || count < 0) {
-                this._setCount(seq, null, false, 'error');
-
-                return;
-            }
-            this._setCount(seq, Math.floor(count), data.capped === true, 'ready');
-        },
-
-        /**
-         * Writes one count outcome, unless a newer request has already superseded it.
-         *
-         * The single write path for all three observables, and the reason overlapping requests are
-         * safe: responses can arrive in any order — a broad tree's count takes longer than the
-         * narrower one the admin typed next — and a late answer must not overwrite a newer one, nor
-         * turn a 'loading' badge back into a number for a rule that has since changed. Everything,
-         * the synchronous transitions included, carries its sequence id and is checked here.
-         *
-         * @param {Number} seq Sequence id the outcome belongs to.
          * @param {Number|null} count Matches, or null when there is no number to show.
          * @param {Boolean} capped Whether the endpoint stopped counting at its cap.
          * @param {String} state 'idle', 'loading', 'ready' or 'error'.
          * @returns {void}
          */
-        _setCount: function (seq, count, capped, state) {
-            if (seq !== this._countSeq) {
-                return;
-            }
+        _setCount: function (count, capped, state) {
             this.matchCount(count);
             this.countCapped(capped);
             this.countState(state);
@@ -5632,18 +4776,12 @@ define([
         },
 
         /**
-         * True when the match-count badge has something to say.
-         *
-         * Two independent reasons for silence, both deliberate: no configured endpoint (the
-         * consumer cannot count, so the badge does not exist) and the 'idle' state (there is no
-         * rule to count). The endpoint check is not redundant — it makes "a consumer that cannot
-         * count shows no badge at all" a property of the config rather than a side effect of a
-         * state machine.
+         * True when the match-count badge has something to say (expression-count badgeVisible()).
          *
          * @returns {Boolean}
          */
         countBadgeVisible: function () {
-            return this.countUrl !== '' && this.countState() !== 'idle';
+            return expressionCount.badgeVisible(this.countUrl, this.countState());
         },
 
         /**
@@ -5664,56 +4802,13 @@ define([
             }
 
             if (state === 'ready') {
-                return this._countLabelWith(this._formatCount(this.matchCount(), this.countCapped()));
+                return expressionCount.labelWithCount(
+                    this.countLabel,
+                    expressionCount.formatCount(this.matchCount(), this.countCapped())
+                );
             }
 
             return '';
-        },
-
-        /**
-         * The consumer's wording with the formatted number substituted for its `%1` placeholder.
-         *
-         * A consumer that supplies no wording — or wording without the placeholder, which is the
-         * same mistake as supplying none — gets the bare number: the number is the point of the
-         * badge, so it degrades to that rather than to a sentence with the count missing. Every
-         * occurrence of the placeholder is substituted, and the substitution is a plain split/join
-         * so nothing in the number can be read as a replacement pattern.
-         *
-         * @param {String} formatted The number as the badge prints it.
-         * @returns {String}
-         */
-        _countLabelWith: function (formatted) {
-            if (this.countLabel.indexOf('%1') === -1) {
-                return formatted;
-            }
-
-            return this.countLabel.split('%1').join(formatted);
-        },
-
-        /**
-         * One count as the badge prints it: thousands grouped, and a trailing `+` when the endpoint
-         * stopped counting at its cap.
-         *
-         * The cap itself is never named here. The endpoint answers with the number it stopped at
-         * plus the flag, so "more than this many" is rendered from what arrived — the component
-         * cannot claim a threshold of its own, and a retuned cap on the endpoint needs no change on
-         * this side. Grouping uses a non-breaking space, so a formatted number never wraps across
-         * lines mid-digits, and it is computed rather than delegated to a locale formatter: the
-         * badge must read the same in every admin locale until wording is translated as a whole.
-         *
-         * @param {Number|null} count Matches reported by the endpoint.
-         * @param {Boolean} capped Whether the endpoint stopped at its cap.
-         * @returns {String} Formatted number, or '' when there is no number.
-         */
-        _formatCount: function (count, capped) {
-            var grouped;
-
-            if (count === null || count === undefined) {
-                return '';
-            }
-            grouped = String(count).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
-
-            return capped ? grouped + '+' : grouped;
         },
 
         /* ---------------- Auto-save into the form's data scope ---------------- */
@@ -5730,11 +4825,15 @@ define([
          *
          * Values rowValueError() flags are serialised all the same: the admin may be mid-typing,
          * so per-operator validation is advisory UI under the editor, never a save gate.
+         *
+         * @returns {void}
          */
         _bindAutoSave: function () {
             var self = this;
+
             this._disposable(ko.computed(function () {
                 var serialised = self.serialise();
+
                 // Only write back if it actually changed — avoids marking the form dirty on initial load.
                 if (serialised !== self.value()) {
                     self.value(serialised);

@@ -20,7 +20,7 @@ use Magento\Framework\Phrase;
  * is-in / is-not-in is noise. Numeric and date types get the four comparison operators on top of
  * equality, matching what Magento's own rule forms offer for those types.
  */
-final class OperatorSetPolicy implements OperatorSetPolicyInterface
+class OperatorSetPolicy implements OperatorSetPolicyInterface
 {
     /**
      * @inheritDoc
@@ -112,8 +112,9 @@ final class OperatorSetPolicy implements OperatorSetPolicyInterface
     }
 
     /**
-     * The date set: equality plus the four comparisons, without is-not — matching the operators
-     * Magento's own rule forms offer for date attributes.
+     * The date set: equality plus the four comparisons, without is-not.
+     *
+     * These are the operators Magento's own rule forms offer for date attributes.
      *
      * @return list<array{value: string, label: Phrase}> Date operator descriptors
      */

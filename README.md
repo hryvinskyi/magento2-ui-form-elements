@@ -3,6 +3,8 @@
 Reusable `ui_component` **admin form** elements. Sibling to
 `hryvinskyi/magento2-configuration-fields`, which does the same job for **system configuration** fields.
 
+![The expression builder: a condition and a nested ANY group, with the expression preview](docs/images/expression-builder.png)
+
 ## Description
 
 Magento ships a fixed set of `formElement` types for ui_component forms. This module adds elements that
@@ -26,21 +28,20 @@ builder. This element is that builder, once.
 | Path | Role |
 |---|---|
 | `view/adminhtml/web/js/form/element/expression-builder.js` | the Knockout component — presentation only |
-| `view/adminhtml/web/js/form/element/expression-tree.js` | pure model: tree structure & serialisation |
-| `view/adminhtml/web/js/form/element/expression-value.js` | pure model: leaf values, value-type & validator registries |
-| `view/adminhtml/web/js/form/element/expression-options.js` | pure model: option-list/tree indexing |
+| `view/adminhtml/web/js/form/element/expression-*.js` | the modules the component delegates to, one concern each: the pure rules, and the pointer drag's DOM adapter `expression-drag.js` (see [Module layout](#module-layout)) |
 | `view/adminhtml/web/template/form/element/expression-builder.html` | the element's outer template |
 | `view/adminhtml/web/template/form/element/expression-group.html` | one group, recursing into child groups |
 | `view/adminhtml/web/template/form/element/expression-preview.html` | one preview node, recursing likewise |
-| `view/adminhtml/web/css/expression-builder.css` | styles — every class and custom property is prefixed `ufe-` |
+| `view/adminhtml/web/css/expression-builder.css` | styles — every class and custom property is prefixed `ufe-`; the palette reads the admin UI kit's tokens |
+| `view/adminhtml/layout/hryvinskyi_ui_form_elements_expression_builder.xml` | the layout handle a form page asks for: the kit's stylesheet, then the builder's |
 | `Api/ExpressionBuilderConfigInterface` | the contract a consuming module implements |
 | `Api/*` + `Model/*` | the shared back-end services (see [Shared PHP services](#shared-php-services)) |
 
 **The component knows nothing about any consumer's domain.** Field labels, attribute codes, wording and
 semantic rules all arrive through the config contract. `product_attribute_picker` and the
-`'product-attribute'` value type are the component's *own* vocabulary and stay.
-`Test/Unit/AssetIntegrityTest` enforces the rule for the assets; `Test/Unit/ModuleBoundaryTest` enforces
-it for the PHP.
+`'product-attribute'` value type are the component's *own* vocabulary and stay. No test checks this
+by reading the source; it is kept in review, and the JS suite runs the pure modules with neutral
+fixtures.
 
 #### Serialisation contract
 
@@ -177,7 +178,8 @@ one — the component requests `optionsUrl?attribute=<code>` once, shows a "Load
 in the value column meanwhile, and writes the answered list into the descriptor, after which every
 option editor behaves exactly as if the list had been inline. Per code, per form, at most one request:
 in-flight requests are de-duplicated and a failed fetch is not retried — that row degrades to the
-option-less editors, which can at least hold a typed value. The endpoint answers `{options: [...]}`
+option-less editors, which can at least hold a typed value. A request with no answer after 15 seconds
+counts as failed (see [Requests](#requests)). The endpoint answers `{options: [...]}`
 via `AttributeOptionsProviderInterface`, whose normalisation is byte-identical to what descriptors used
 to embed, so a rule authored against a lazily-loaded list serialises exactly as it always did.
 
@@ -518,10 +520,26 @@ label without `%1` degrades to the bare number.
 from the number and the flag that arrived, so retuning the endpoint's cap needs no change here. An empty
 tree resolves locally to the badge's silent `idle` state — no request — because consumers disagree on
 what "no conditions" selects. Every failure mode (non-OK status, a body that is not JSON, a rejected
-fetch, `{error: true}`, a missing or non-numeric count) renders as *unavailable* rather than as zero:
-"nothing matches" and "the count could not be produced" must not look alike. Overlapping requests are
-safe — every write carries a sequence id and a superseded answer is dropped — and an unchanged tree costs
-no request at all.
+fetch, no answer within 15 seconds, `{error: true}`, a missing or non-numeric count) renders as
+*unavailable* rather than as zero: "nothing matches" and "the count could not be produced" must not look
+alike. Overlapping requests are safe — an edit aborts the count request in flight, and an aborted
+request's answer is never shown — and an unchanged tree costs no request at all.
+
+#### Requests
+
+The component sends three kinds of request: the match count, a row's value suggestions, and an
+attribute's option list. All three follow the same rules (`expression-requests.js`):
+
+- **A newer request aborts the one it supersedes.** A new tree aborts the count in flight; a new query
+  in a row — or one too short to ask about — aborts that row's suggest request. An aborted request's
+  answer is never written, so a slow answer to an older question cannot replace the current one.
+- **Every request has a 15-second deadline** (`REQUEST_DEADLINE` in `expression-requests.js`, a module
+  constant rather than a tunable). Past it the request is aborted and fails like any broken response:
+  the badge shows *Count unavailable*, the row's value column falls back to the option-less editors, the
+  suggestion list empties.
+- **`destroy()` aborts every request in flight**, and the component starts no request after it. A
+  field the form discards and rebuilds — a modal closing, a dynamic-rows entry removed — receives no
+  late answers.
 
 #### Shared PHP services
 
@@ -624,7 +642,7 @@ hot path, and the pattern for that is a dependency-free class constant pinned to
 unit test:
 
 ```php
-final class MyConditionsConfig implements ExpressionBuilderConfigInterface
+class MyConditionsConfig implements ExpressionBuilderConfigInterface
 {
     /**
      * Condition classes this form can author. Kept dependency-free so the storefront path can read
@@ -710,13 +728,28 @@ A `<label>` in the field's settings is rendered as the builder's own heading. Th
 label/control wrap stays suppressed either way: this element replaces the standard field template, so
 that wrap would only reappear as a stray heading and an input wrap around a widget that is not an input.
 
-3. Include the stylesheet in the form's layout handle:
+3. Include the stylesheets: in the layout file of the form's page, ask for the module's handle.
 
 ```xml
-<head>
-    <css src="Hryvinskyi_UiFormElements::css/expression-builder.css"/>
-</head>
+<page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
+    <update handle="hryvinskyi_ui_form_elements_expression_builder"/>
+    …
+</page>
 ```
+
+The handle links the admin UI kit's stylesheet (`hryvinskyi/magento2-admin-ui`, a dependency of this
+package), then `expression-builder.css`. The builder's root carries the kit's tokens-only root
+(`hui-tokens`), and its colours, radii and typefaces read the kit's `--hui-*` tokens, so the builder
+takes the kit's look and any theming of the kit's tokens on the page; its controls keep their own rules.
+A page that still includes only the stylesheet, with a bare
+`<css src="Hryvinskyi_UiFormElements::css/expression-builder.css"/>`, keeps working: every token falls
+back to the Magento admin palette (greys, borders, 3px radii) and to the kit's blue accent
+(`#3b63fb`); the 1.1 orange accent is gone. Accent tints (focus ring, rail, washes) follow the accent
+in browsers with `color-mix()`; older browsers keep blue tints (`rgba(59, 99, 251, …)`).
+
+A form rendered into a modal through `mui/index/render_handle` gets no `<head>` of its own, so its
+layout cannot link a stylesheet. The page that hosts the modal asks for the handle instead.
 
 4. The field posts a **single JSON string**. Decode it on save, run it through
    `ConditionTreeValidatorInterface::isValid()` against your `ALLOWED_CONDITION_TYPES`, and hydrate with
@@ -733,59 +766,170 @@ that wrap would only reappear as a stray heading and an input wrap around a widg
 
 ## Module layout
 
-The front end splits by concern into dependency-light AMD modules — never a util grab-bag:
+The front end splits by concern into dependency-light AMD modules — never a util grab-bag. No module but
+the component imports Knockout or `mage/translate`, touches a global or sends a request, so each one runs
+under plain Node; the two that drive the platform (`expression-requests.js`, `expression-drag.js`) are
+handed it as an argument.
 
 - **`expression-tree.js`** — tree structure and serialisation *only*: tree ⇄ recursive group model,
-  conjunctive closure and scope, group enumeration, node movement, insertion slots, contradiction
-  solving. Depends on `underscore`.
+  the stored field value ⇄ the model (malformed JSON loads empty, a rule with no condition saves as
+  `''`), conjunctive closure and scope, group enumeration, node movement, insertion slots, subtree height
+  and condition count, what a group directly holds, the aggregator a nested group starts on,
+  contradiction solving. Depends on `underscore`.
 - **`expression-value.js`** — leaf values: value shapes between storage and editor, pasted-list parsing,
-  and the value-type and validator registries. No dependencies.
-- **`expression-options.js`** — option-list indexing: parent/child maps, breadcrumb paths, subtree sizes,
-  path search with its cap. No dependencies.
-- **`expression-builder.js`** — the Knockout component, **presentation only**. Every user-facing phrase
-  lives here (or arrives already translated from a consumer's config); the pure modules carry no wording
-  at all, which the test suite asserts by scanning them for translation calls.
+  the value-type and validator registries, which validator a value fails, and the scalar editor's rules
+  (whether a row is in a scalar context, whether it renders the scalar editor or keeps the type-ahead,
+  what it shows and stores, what an empty editor still needs). No dependencies.
+- **`expression-options.js`** — option lists: parent/child maps, breadcrumb paths, subtree sizes, path and
+  flat search with their cap, what a list-valued editor still offers, the bare label of a chosen option.
+  No dependencies.
+- **`expression-config.js`** — the consumer's `builderConfig` with every documented key present, the
+  tunables sanitised (and the values the visual ones may take), the fields indexed by type. No
+  dependencies.
+- **`expression-fields.js`** — what a field descriptor says about a row: the picked attribute, the
+  operators offered, a fresh row's defaults and what it carries over when its field or attribute
+  changes, the unit, where the row's options come from, and whether a single value is picked from the
+  plain `<select>` or the searchable combobox. No dependencies.
+- **`expression-condition.js`** — one stored leaf ⇄ the state of its row, byte-identical on an unchanged
+  rule; a row whose field is not configured drops out of the saved rule. Depends on `expression-fields`,
+  `expression-value`.
+- **`expression-coherence.js`** — which fields a row may pick, and the rule's contradiction and
+  missing-context warnings. Depends on `expression-tree`, `expression-value`, `expression-fields`.
+- **`expression-reorder.js`** — where a node may move: the depth cap (shared with the add-group action),
+  the slot walk, a keystroke's step, where each gap is measured and which is nearest to the pointer, where
+  the drop indicator sits, the announced position. Depends on `expression-tree`.
+- **`expression-listbox.js`** — the dropdowns' rules: the keyboard pattern (a key → one action), which
+  variant a row's open list is (searchable single-select, option tree, type-ahead, flat list), whether
+  the tree or the type-ahead feeds it, the variant registry (what a commit does — Enter on a collapsed
+  parent expands it, the type-ahead replaces or appends — whether picking adds to a list, whether the
+  open list is on screen), who owns the open list, what a value editor does with a key the pattern left
+  alone, and what a closed searchable select shows. Depends on `expression-options`.
+- **`expression-option-tree.js`** — the hierarchical picker's view state: visible nodes, partly-selected
+  counts, expansion maps, breadcrumb labels, the size limit of "Expand all", what toggling a node does.
+  No dependencies.
+- **`expression-list-value.js`** — editing a list value: de-duplicated appends, removal, pill collapse,
+  clear-all, typed text, what the offer leaves out, a paste planned and resolved against the options.
+  Depends on `expression-options`, `expression-value`.
+- **`expression-preview.js`** — the structured preview's shape, which label each token takes, and how a
+  value prints. Depends on `expression-fields`.
+- **`expression-count.js`** — the match-count badge: whether the consumer counts at all, when to ask,
+  what to post, how to read the answer, how to print the number. No dependencies.
+- **`expression-remote-options.js`** — the attribute-option and value-suggest endpoints: when each is asked
+  (one option request per attribute, none after a failure), the URL, how the answer is read, when the
+  type-ahead has something to show. No dependencies.
+- **`expression-requests.js`** — the requests' lifecycle: which request a newer one supersedes, the
+  15-second deadline, aborting everything on teardown, and whether an answer may still be written. The
+  abort controllers and timers it drives are handed in. No dependencies.
+- **`expression-drag.js`** — the one adapter beside the component: a pointer drag's DOM work (the handle's
+  pointer capture, the Escape listener, measuring rendered nodes by id). The document is handed in, so it
+  runs under Node against a recording document. Where a node may go stays in `expression-reorder.js`. No
+  dependencies.
+- **`expression-builder.js`** — the Knockout component, **presentation only**: observables, the members
+  the templates bind, focus, timers, sending the requests, the pointer drag's state. It asks the modules
+  above for every decision and applies the answer. Every user-facing phrase lives here (or arrives
+  already translated from a consumer's config); the other modules carry no wording at all.
 
 The PHP side follows the repo's convention: contracts in `Api/`, implementations in `Model/`, wired in
 `etc/di.xml`. There are no Helper classes and no `ObjectManager` calls.
 
 ## Testing
 
-The three pure JS modules have behavioural tests that run on **plain Node** — no Magento bootstrap, no
-`npm install`, no build step:
+**JS.** Every module but the component has behavioural tests that run on **plain Node**, with no
+Magento bootstrap, no `npm install` and no build step. The request lifecycle runs against Node's own
+`AbortController` and a timer the test fires by hand, the drag adapter against a recording document and
+drag handle. The suite loads each module from its real path, in
+dependency order, and hands a module the real siblings it depends on, so a moved or renamed module fails
+it:
 
 ```
 node app/code/Hryvinskyi/UiFormElements/Test/Js/run.mjs
 ```
 
-Run it from the repo root; it prints one line per suite and exits non-zero on failure. The **component
-itself is deliberately not runnable there**: it depends on browser-only Magento AMD modules
-(`Magento_Ui/js/form/element/abstract`, `ko`, `mage/translate`), so the harness would have to stub half
-the admin framework — and a stub is not what a regression net should assert against. What the component
-must uphold is asserted structurally instead, by `Test/Unit/AssetIntegrityTest`, which reads the shipped
-assets as text: asset paths and template names resolve, every template binding names a member the
-component defines, the dropdowns carry the ARIA contract, every button has an accessible name, the depth
-cap comes from config rather than a literal, `destroy()` releases every computed, timer and listener, no
-consumer domain vocabulary appears anywhere, and the dictionary matches what is rendered.
+Run it from the repo root; it prints one line per suite and exits non-zero on failure. The Knockout
+component itself is not run there: it depends on browser-only Magento AMD modules
+(`Magento_Ui/js/form/element/abstract`, `ko`, `mage/translate`). The browser suite below runs it.
+
+**Browser.** `Test/Js/browser/` renders the real component in Chromium, driven by Playwright. A static
+harness page loads it the way an admin form does — Magento's own RequireJS from `lib/web`, the module
+configs of Magento_Theme, Magento_Translation and Magento_Ui, Knockout, jQuery, underscore, Magento_Ui's
+Knockout bootstrap with its template engine and bindings (`scope`, `i18n`), `mage/translate` with a
+translation dictionary, `uiLayout`, `uiRegistry` and Magento_Ui's abstract form element — and renders the
+three templates from this module's working copy. A small Node server started by the tests serves it on
+`127.0.0.1` and a free port; no store, database or static-content deploy is involved, and nothing beyond
+localhost is contacted. The one stand-in is the network: the page's `fetch` records each request and
+answers only when a test says so, which is how a test delivers an answer after `destroy()`. The server
+finds Magento's `lib/web` in the nearest ancestor directory of the module, or in `MAGENTO_ROOT` when set.
+
+The suite covers the rendered rule (rows, the nested group, every value editor, the preview, the `i18n`
+binding), the ALL/ANY toggle, adding a condition, the combobox/listbox ARIA contract under the keyboard (the
+multi-value list, the option tree, the searchable single-select), a keyboard reorder with its focus and
+live-region announcement, a pointer drag dropped at the nearest gap, the attribute picker's suggest editors
+(single and list: the minimum length, the debounce, a newer query aborting the older, a late answer dropped,
+Enter committing, the empty and refused answers), its option-list fetch (one request per attribute code, the
+loading state while it is slow, the option-less editor after a refused or empty answer, never asked again),
+the paste report of a list editor (known values added, unknown ones counted, the hint going after its
+lifetime, a paste with no separator left to the browser), the "Count unavailable" state of a request past its
+15-second deadline (the one test that makes the harness `fetch` fail on abort, as a real one does), and
+`destroy()`: the request in flight is aborted and its late answer writes nothing, no request starts
+afterwards, a drag in progress gives back its pointer capture, no timer fires into the view model afterwards
+(the suggest debounce, the deferred count, the deferred focus, the paste report's, every request deadline), and the computeds are
+disposed (a later change reaches neither the preview, the warnings, the stored value nor the count). Tests that
+depend on a timer hold the page's clock with Playwright's `page.clock` and advance it by hand, and a control
+test runs the same sequence without `destroy()` to show the timers do fire. A test fails when the page logs an
+error or a warning, throws, or asks for a missing file, so a template binding that names a member the
+component lacks fails the suite.
+
+Playwright is a development dependency of `Test/Js/package.json` alone, pinned, with its lock file;
+`node_modules` and Playwright's output are ignored by git and left out of the package archive. Once:
 
 ```
-ddev exec vendor/bin/phpunit -c dev/tests/unit/phpunit.xml.dist app/code/Hryvinskyi/UiFormElements/Test/Unit
+cd app/code/Hryvinskyi/UiFormElements/Test/Js
+npm ci
+npx playwright install chromium
 ```
+
+Then, from the same directory:
+
+```
+npx playwright test
+```
+
+**Unit.** The shared PHP services, against Composer's autoloader without booting Magento:
+
+```
+vendor/bin/phpunit -c app/code/Hryvinskyi/UiFormElements/phpunit.xml.dist
+```
+
+**Integration.** `Test/Integration/View/AssetsTest` resolves the stylesheet, the three Knockout
+templates and every script of the component through Magento's view-file fallback in the admin area, and
+renders a page head with the
+module's layout handle: the kit's stylesheet must be linked, then the builder's. Run it with Magento's
+integration framework:
+
+```
+cd dev/tests/integration
+../../../vendor/bin/phpunit -c phpunit.xml ../../../app/code/Hryvinskyi/UiFormElements/Test/Integration
+```
+
+**Not checked automatically.** That every button has an accessible name is held only for the buttons the suite
+asks for by name. Of `destroy()`, the computeds are checked through the four outputs they drive, so a computed
+created later and not registered for disposal is caught only if it drives one of those. Real clipboard
+access is not exercised: the paste tests dispatch a paste event carrying the text.
 
 ## Translations
 
-`i18n/en_US.csv` is **generated from three sources** and pinned by
-`AssetIntegrityTest::testEveryUiStringIsInTheTranslationDictionary`: `$t('…')` calls in every JS file
-under `view/adminhtml/web/js`, `i18n: '…'` bindings in every template under
-`view/adminhtml/web/template`, and `__('…')` in the module's shipped PHP (the operator labels are this
-module's own wording). Both directions are asserted — a missing row and a dead row both fail — along with
-the row count, the key-equals-value shape and the alphabetical order, so the file stays exactly what
-regenerating it produces.
+`i18n/en_US.csv` holds the phrases of three sources: `$t('…')` calls in every JS file under
+`view/adminhtml/web/js`, `i18n: '…'` bindings in every template under `view/adminhtml/web/template`, and
+`__('…')` in the module's shipped PHP (the operator labels are this module's own wording). Each row's key
+equals its value, and the rows are in alphabetical order. No test keeps the file in step with the
+sources: a phrase added or removed in a script, a template or the PHP needs its row added or removed by
+hand.
 
 Two mechanical rules follow from that:
 
 - **One single-line literal per `$t()` call.** No concatenation, no variable, no multi-line argument:
-  extraction is textual, so a phrase assembled at runtime ships untranslatable with nothing failing.
+  Magento's translation extraction reads the literal, so a phrase assembled at runtime ships
+  untranslatable with nothing failing.
   Parameterised phrases keep `%1` inside the literal and substitute afterwards — which also lets a
   translator move the placeholder within the sentence.
 - **Consumer wording is never re-wrapped.** `emptyStateMessage`, the `coherence` warnings, `countLabel`,
@@ -797,19 +941,12 @@ In the templates, static text *content* uses the `i18n` binding, which translate
 while anything an HTML attribute carries — `placeholder`, `title`, `aria-label` — comes from a component
 accessor through a binding, because a phrase written straight into an attribute is translated by nothing.
 
-## Consumers in this project
-
-- `Hryvinskyi_ProductShowcase` — the row form's rule-based product source (supplies `countUrl`, omits
-  `coherence`)
-- `Hryvinskyi_BannerZone` — the banner's request-targeting conditions (supplies `coherence`, omits
-  `countUrl`)
-
 ## Notes
 
 - Renaming or moving these asset paths requires `setup:static-content:deploy`; the Knockout templates are
   resolved by the path strings in the JS component's `defaults` and in the templates themselves, so a
-  moved template fails at runtime rather than at compile time. `Test/Unit/AssetIntegrityTest` guards the
-  paths and the `ufe-` class contract.
-- The shared module never references a consumer symbol — no import, no fully-qualified name, no
-  class-string, no module name in the package metadata. `Test/Unit/ModuleBoundaryTest` asserts it for the
-  PHP and the package files; `AssetIntegrityTest`'s vocabulary sweep asserts it for the assets.
+  moved template fails at runtime rather than at compile time. The integration test resolves the
+  stylesheet, the templates and the scripts under their current paths; a new template or script needs a
+  line there too.
+- The shared module never references a consumer symbol: no import, no fully-qualified name, no
+  class-string, no module name in the package metadata. This is kept in review.

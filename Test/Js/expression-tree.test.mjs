@@ -423,5 +423,136 @@ export function buildTests(expressionTree) {
         ]), true);
     });
 
+    test('solveContradictions: an inequality only narrows, it never clashes on its own', () => {
+        assert.strictEqual(expressionTree.solveContradictions([
+            {operator: '()', value: 'A,B'},
+            {operator: '!=', value: 'A'}
+        ]), false);
+        assert.strictEqual(expressionTree.solveContradictions([
+            {operator: '()', value: 'A,B'},
+            {operator: '!=', value: 'A'},
+            {operator: '!=', value: 'B'}
+        ]), true);
+    });
+
+    test('solveContradictions: an exclusion before an equality of the same value clashes', () => {
+        assert.strictEqual(expressionTree.solveContradictions([
+            {operator: '!()', value: ['A', 'C']},
+            {operator: '==', value: 'C'}
+        ]), true);
+    });
+
+    test('solveContradictions: an empty membership constrains nothing; an all-excluded one clashes', () => {
+        assert.strictEqual(expressionTree.solveContradictions([
+            {operator: '()', value: ''},
+            {operator: '==', value: 'A'}
+        ]), false);
+        assert.strictEqual(expressionTree.solveContradictions([
+            {operator: '!=', value: 'A'},
+            {operator: '()', value: 'A'}
+        ]), true);
+    });
+
+    test('solveContradictions: rows under an operator the check does not know constrain nothing', () => {
+        assert.strictEqual(expressionTree.solveContradictions([
+            {operator: '==', value: 'A'},
+            {operator: '>=', value: 'B'},
+            {operator: 'constructor', value: 'B'}
+        ]), false);
+        assert.strictEqual(expressionTree.solveContradictions([]), false);
+    });
+
+    test('solveContradictions: a value spelling an Object.prototype member is a value like any other', () => {
+        assert.strictEqual(expressionTree.solveContradictions([
+            {operator: '==', value: 'constructor'},
+            {operator: '==', value: 'constructor'}
+        ]), false);
+        assert.strictEqual(expressionTree.solveContradictions([
+            {operator: '()', value: 'toString,A'},
+            {operator: '==', value: 'toString'}
+        ]), false);
+    });
+
+    /* ---------------- height / conditionCount ---------------- */
+
+    test('height: 0 for a condition, 1 for a flat group, one more per level of nesting', () => {
+        const c = condition(leaf('a', '==', '1'));
+
+        assert.strictEqual(expressionTree.height(c), 0);
+        assert.strictEqual(expressionTree.height(group('all')), 1);
+        assert.strictEqual(expressionTree.height(group('all', c, c)), 1);
+        assert.strictEqual(expressionTree.height(group('all', c, group('any', c, group('all')), group('any'))), 3);
+    });
+
+    test('conditionCount: every condition at any depth, nothing for a condition or junk', () => {
+        const c = condition(leaf('a', '==', '1'));
+
+        assert.strictEqual(expressionTree.conditionCount(group('all')), 0);
+        assert.strictEqual(expressionTree.conditionCount(group('all', c, group('any', c, group('all', c)), c)), 4);
+        assert.strictEqual(expressionTree.conditionCount(c), 0);
+        assert.strictEqual(expressionTree.conditionCount(null), 0);
+    });
+
+    /* ---------------- the component's tree questions ---------------- */
+
+    test('normaliseAggregator: exactly "any" stays, everything else reads as "all"', () => {
+        assert.strictEqual(expressionTree.normaliseAggregator('any'), 'any');
+        assert.strictEqual(expressionTree.normaliseAggregator('all'), 'all');
+        assert.strictEqual(expressionTree.normaliseAggregator('ANY'), 'all');
+        assert.strictEqual(expressionTree.normaliseAggregator(undefined), 'all');
+    });
+
+    test('oppositeAggregator: a nested group starts on the other word than its parent', () => {
+        assert.strictEqual(expressionTree.oppositeAggregator('all'), 'any');
+        assert.strictEqual(expressionTree.oppositeAggregator('any'), 'all');
+        assert.strictEqual(expressionTree.oppositeAggregator('zz_unknown'), 'all');
+    });
+
+    test('modelFromStoredValue: a stored JSON string or tree loads; nothing, junk and malformed JSON load empty', () => {
+        const a = leaf('a', '==', '1');
+        const empty = group('all');
+        const stored = combine('any', [a]);
+
+        assert.deepStrictEqual(expressionTree.modelFromStoredValue(JSON.stringify(stored), COMBINE), group('any', condition(a)));
+        assert.deepStrictEqual(expressionTree.modelFromStoredValue(stored, COMBINE), group('any', condition(a)));
+        for (const raw of ['', null, undefined, '{not json', 'null', '0', 0, false]) {
+            assert.deepStrictEqual(expressionTree.modelFromStoredValue(raw, COMBINE), empty, JSON.stringify(raw));
+        }
+    });
+
+    test('serialiseModel: the frozen Combine shape as JSON, the empty value when no condition is left', () => {
+        const a = leaf('a', '==', '1');
+
+        assert.strictEqual(expressionTree.serialiseModel(group('all', condition(a)), COMBINE), JSON.stringify(combine('all', [a])));
+        assert.strictEqual(expressionTree.serialiseModel(group('all'), COMBINE), '');
+        assert.strictEqual(expressionTree.serialiseModel(group('any', group('all')), COMBINE), '',
+            'a rule of empty groups saves as no rule');
+    });
+
+    test('serialiseModel and modelFromStoredValue: a stored rule round-trips byte-identically', () => {
+        const stored = JSON.stringify(combine('all', [leaf('a', '==', '1'), combine('any', [leaf('b', '!=', '2')])]));
+
+        assert.strictEqual(expressionTree.serialiseModel(expressionTree.modelFromStoredValue(stored, COMBINE), COMBINE), stored);
+    });
+
+    test('groupContents: a group\'s direct conditions and groups, never what a nested group holds', () => {
+        const c = condition(leaf('a', '==', '1'));
+
+        assert.deepStrictEqual(expressionTree.groupContents([c, group('any', c, c), c]),
+            {conditions: 2, groups: 1, hasConditions: true, empty: false});
+        assert.deepStrictEqual(expressionTree.groupContents([group('all', c)]),
+            {conditions: 0, groups: 1, hasConditions: false, empty: false});
+        assert.deepStrictEqual(expressionTree.groupContents([]),
+            {conditions: 0, groups: 0, hasConditions: false, empty: true});
+    });
+
+    test('ruleSummary: how many conditions, and the depth only once a group nests', () => {
+        const c = condition(leaf('a', '==', '1'));
+
+        assert.deepStrictEqual(expressionTree.ruleSummary(group('all')), {conditions: 0, depth: null});
+        assert.deepStrictEqual(expressionTree.ruleSummary(group('all', c, c)), {conditions: 2, depth: null});
+        assert.deepStrictEqual(expressionTree.ruleSummary(group('all', c, group('any', c, group('all', c)))), {conditions: 3, depth: 3});
+    });
+
     return tests;
 }

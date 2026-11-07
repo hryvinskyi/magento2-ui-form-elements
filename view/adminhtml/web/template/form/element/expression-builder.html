@@ -10,7 +10,7 @@
      silently disobeyed. Keep it on the root: hiding anything less leaves part of the widget on screen.
      The css binding carries the visual tunables (joiner treatment, density) as modifier classes, so
      the stylesheet owns everything that follows from those choices. -->
-<div class="ufe-expression-builder" data-bind="visible: visible, css: builderModifierClasses()">
+<div class="ufe-expression-builder hui-tokens" data-bind="visible: visible, css: builderModifierClasses()">
     <!-- The heading row: the field's own label, when the form XML sets one (this element replaces
          the standard field template, so nothing else would render it; the text arrives already
          translated, from the consumer's PHP, and is bound as it came), and the rule-summary chip —

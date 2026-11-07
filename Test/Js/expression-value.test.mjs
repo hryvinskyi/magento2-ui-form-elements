@@ -434,5 +434,132 @@ export function buildTests(expressionValue) {
         assert.strictEqual(expressionValue.validators['null'], undefined);
     });
 
+    /* ---------------- failingValidator / isEmptyValue ---------------- */
+
+    test('failingValidator: the operator\'s own validator wins and the type is never asked', () => {
+        const typeNameOf = () => {
+            throw new Error('an operator naming its validator never needs the type');
+        };
+
+        assert.deepStrictEqual(
+            expressionValue.failingValidator({value: '~', validate: 'regex'}, typeNameOf, '([a'),
+            {name: 'regex', message: ''}
+        );
+        assert.strictEqual(expressionValue.failingValidator({value: '~', validate: 'regex'}, typeNameOf, 'a+'), null);
+    });
+
+    test('failingValidator: the operator\'s message travels with the failure', () => {
+        assert.deepStrictEqual(
+            expressionValue.failingValidator({validate: 'not-empty', validateMessage: 'Fill me in'}, () => null, ' '),
+            {name: 'not-empty', message: 'Fill me in'}
+        );
+    });
+
+    test('failingValidator: without an operator validator the scalar type\'s default applies', () => {
+        assert.deepStrictEqual(expressionValue.failingValidator(null, () => 'integer', '1.5'), {name: 'integer', message: ''});
+        assert.strictEqual(expressionValue.failingValidator({value: '=='}, () => 'integer', '15'), null);
+        assert.strictEqual(expressionValue.failingValidator(null, () => 'text', 'anything'), null, 'text carries no validator');
+        assert.strictEqual(expressionValue.failingValidator(null, () => null, '1.5'), null, 'no scalar context, nothing validates');
+    });
+
+    test('failingValidator: an unregistered validator validates nothing', () => {
+        assert.strictEqual(expressionValue.failingValidator({validate: 'zz_unregistered'}, () => 'integer', 'x'), null);
+        assert.strictEqual(expressionValue.failingValidator({validate: 'toString'}, () => 'integer', 'x'), null);
+    });
+
+    test('isEmptyValue: an empty list or blank text', () => {
+        for (const empty of [[], '', '   ', null, undefined]) {
+            assert.strictEqual(expressionValue.isEmptyValue(empty), true, JSON.stringify(empty));
+        }
+        for (const full of [['a'], 'a', 0, false]) {
+            assert.strictEqual(expressionValue.isEmptyValue(full), false, JSON.stringify(full));
+        }
+    });
+
+    /* ---------------- the scalar editor ---------------- */
+
+    /**
+     * A probe whose every member answers a fixed value and records, in order, that it was asked.
+     *
+     * @param {Object.<String, *>} answers Member name → the value it answers.
+     * @returns {Object} The probe, with `asked` listing the members asked.
+     */
+    const lazy = (answers) => {
+        const probe = {asked: []};
+
+        for (const [name, value] of Object.entries(answers)) {
+            probe[name] = () => {
+                probe.asked.push(name);
+
+                return value;
+            };
+        }
+
+        return probe;
+    };
+
+    test('scalarTypeName: the descriptor\'s type in a scalar context, none under an option list or a list operator', () => {
+        const optioned = lazy({hasOptions: true, usesListOperator: false, descriptor: {inputType: 'int'}});
+        const listed = lazy({hasOptions: false, usesListOperator: true, descriptor: {inputType: 'int'}});
+
+        assert.strictEqual(expressionValue.scalarTypeName(
+            lazy({hasOptions: false, usesListOperator: false, descriptor: {inputType: 'int'}})), 'integer');
+        assert.strictEqual(expressionValue.scalarTypeName(
+            lazy({hasOptions: false, usesListOperator: false, descriptor: null})), 'text');
+        assert.strictEqual(expressionValue.scalarTypeName(optioned), null);
+        assert.strictEqual(expressionValue.scalarTypeName(listed), null);
+        assert.deepStrictEqual(optioned.asked, ['hasOptions']);
+        assert.deepStrictEqual(listed.asked, ['hasOptions', 'usesListOperator']);
+    });
+
+    test('usesScalarEditor: every scalar type, except plain text on an attribute whose values are suggested', () => {
+        const uses = (answers) => expressionValue.usesScalarEditor(lazy(answers));
+        const pending = lazy({typeName: 'integer', optionsPending: true, supportsSuggest: false});
+
+        assert.strictEqual(uses({typeName: 'integer', optionsPending: false, supportsSuggest: true}), true,
+            'a typed scalar outranks the suggestions');
+        assert.strictEqual(uses({typeName: 'text', optionsPending: false, supportsSuggest: false}), true);
+        assert.strictEqual(uses({typeName: 'text', optionsPending: false, supportsSuggest: true}), false,
+            'free text with suggestions keeps the type-ahead');
+        assert.strictEqual(uses({typeName: null, optionsPending: false, supportsSuggest: false}), false);
+        assert.strictEqual(expressionValue.usesScalarEditor(pending), false,
+            'a list still on its way shows its loading state instead');
+        assert.deepStrictEqual(pending.asked, ['typeName', 'optionsPending']);
+    });
+
+    test('scalarEditorShape: no type is plain text, and only plain text is free text', () => {
+        assert.deepStrictEqual(expressionValue.scalarEditorShape(null), {type: 'text', freeText: true});
+        assert.deepStrictEqual(expressionValue.scalarEditorShape('text'), {type: 'text', freeText: true});
+        assert.deepStrictEqual(expressionValue.scalarEditorShape('date'), {type: 'date', freeText: false});
+        assert.deepStrictEqual(expressionValue.scalarEditorShape('zz_unregistered'), {type: 'zz_unregistered', freeText: false});
+    });
+
+    test('editValueOf: the type\'s display transform, otherwise the stored value as text', () => {
+        assert.strictEqual(expressionValue.editValueOf('date', '2026-11-07 10:00:00'), '2026-11-07');
+        assert.strictEqual(expressionValue.editValueOf('integer', 12), '12');
+        assert.strictEqual(expressionValue.editValueOf(null, null), '');
+        assert.strictEqual(expressionValue.editValueOf('text', undefined), '');
+        assert.strictEqual(expressionValue.editValueOf('zz_unregistered', 'raw'), 'raw');
+    });
+
+    test('commitValueOf: the type\'s commit transform, otherwise the input as typed', () => {
+        expressionValue.registerValueType('zz_upper', {attrs: {type: 'text'}, commitValue: (input) => input.toUpperCase()});
+
+        assert.strictEqual(expressionValue.commitValueOf('zz_upper', 'abc'), 'ABC');
+        assert.strictEqual(expressionValue.commitValueOf('date', '2026-11-07'), '2026-11-07');
+        assert.strictEqual(expressionValue.commitValueOf(null, ' as typed '), ' as typed ');
+    });
+
+    test('emptyValueNeeds: none once a value exists, several values for a list editor, one otherwise', () => {
+        const needs = (answers) => expressionValue.emptyValueNeeds(lazy(answers));
+        const filled = lazy({value: 'x', usesListOperator: true, valueType: 'multiselect'});
+
+        assert.strictEqual(needs({value: '', usesListOperator: true, valueType: 'text'}), 'several');
+        assert.strictEqual(needs({value: [], usesListOperator: false, valueType: 'multiselect'}), 'several');
+        assert.strictEqual(needs({value: '  ', usesListOperator: false, valueType: 'text'}), 'one');
+        assert.strictEqual(expressionValue.emptyValueNeeds(filled), 'none');
+        assert.deepStrictEqual(filled.asked, ['value'], 'a row holding a value is not asked about its editor');
+    });
+
     return tests;
 }

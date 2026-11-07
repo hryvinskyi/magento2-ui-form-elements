@@ -27,7 +27,7 @@ use PHPUnit\Framework\TestCase;
  * rule authored against a lazily-loaded list serialises exactly as it always did — the select
  * normalisation cases mirror what the meta provider's test asserted before options moved out.
  */
-final class AttributeOptionsProviderTest extends TestCase
+class AttributeOptionsProviderTest extends TestCase
 {
     /**
      * @var EavConfig&MockObject
@@ -41,6 +41,8 @@ final class AttributeOptionsProviderTest extends TestCase
 
     /**
      * Provider under test.
+     *
+     * @var AttributeOptionsProvider
      */
     private AttributeOptionsProvider $provider;
 
@@ -93,6 +95,36 @@ final class AttributeOptionsProviderTest extends TestCase
                 ['value' => '12', 'label' => '12'],
             ],
             $this->provider->getOptions('color')
+        );
+    }
+
+    /**
+     * A value with no string form is skipped like an option group, and a label with no string
+     * form falls back to the value.
+     *
+     * @return void
+     */
+    public function testValuesAndLabelsWithoutAStringFormAreNotRendered(): void
+    {
+        $source = $this->createMock(TableSource::class);
+        $source->method('getAllOptions')->willReturn([
+            'not an option',
+            ['value' => new \stdClass(), 'label' => 'Unrenderable value must be skipped'],
+            ['value' => 20, 'label' => ['nested']],
+            ['value' => 21, 'label' => new \stdClass()],
+            ['value' => 22, 'label' => null],
+        ]);
+        $attribute = $this->attributeMock(102, 'multiselect');
+        $attribute->method('getSource')->willReturn($source);
+        $this->eavConfig->method('getAttribute')->willReturn($attribute);
+
+        self::assertSame(
+            [
+                ['value' => '20', 'label' => '20'],
+                ['value' => '21', 'label' => '21'],
+                ['value' => '22', 'label' => '22'],
+            ],
+            $this->provider->getOptions('material')
         );
     }
 

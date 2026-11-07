@@ -1,0 +1,5 @@
+/docs export-ignore
+/Test/Js/node_modules export-ignore
+/Test/Js/test-results export-ignore
+/Test/Js/playwright-report export-ignore
+/Test/Js/blob-report export-ignore

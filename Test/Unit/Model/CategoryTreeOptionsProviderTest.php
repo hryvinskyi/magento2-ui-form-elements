@@ -23,7 +23,7 @@ use PHPUnit\Framework\TestCase;
  * The client-side tree derives all hierarchy from `level` + `parent`, so the shape of those two
  * keys — plain un-prefixed labels included — is the load-bearing contract here.
  */
-final class CategoryTreeOptionsProviderTest extends TestCase
+class CategoryTreeOptionsProviderTest extends TestCase
 {
     /**
      * @var CollectionFactory&MockObject
@@ -119,20 +119,55 @@ final class CategoryTreeOptionsProviderTest extends TestCase
     }
 
     /**
-     * An empty catalog yields an empty list, not an error — and is memoised too.
+     * An empty catalog yields an empty list, not an error — and the empty list is memoised too: a
+     * second read answers it again even though a re-scan would now find a category.
      *
      * @return void
      */
     public function testEmptyCollectionYieldsEmptyList(): void
     {
-        $this->collection->method('getIterator')->willReturn(new \ArrayIterator([]));
+        $this->collection->method('getIterator')->willReturnOnConsecutiveCalls(
+            new \ArrayIterator([]),
+            new \ArrayIterator([
+                new DataObject(['entity_id' => 2, 'name' => 'Root A', 'level' => 1, 'parent_id' => 1]),
+            ])
+        );
         $this->collectionFactory->expects(self::once())
             ->method('create')
             ->willReturn($this->collection);
 
         $provider = new CategoryTreeOptionsProvider($this->collectionFactory);
+        $first = $provider->getOptions();
+        $second = $provider->getOptions();
 
-        self::assertSame([], $provider->getOptions());
-        self::assertSame([], $provider->getOptions());
+        self::assertSame([], $first);
+        self::assertSame([], $second, 'An empty list is memoised like any other; the second read must not re-scan.');
+    }
+
+    /**
+     * Rows that are not data objects are skipped, and a column holding no scalar reads as empty:
+     * an empty id, level 0, and — a level-0 row having no parent — an empty parent. A parent
+     * column that is missing reads as category 0.
+     *
+     * @return void
+     */
+    public function testRowsAndColumnsWithoutScalarsReadAsEmpty(): void
+    {
+        $this->collection->method('getIterator')->willReturn(new \ArrayIterator([
+            'not a category row',
+            new DataObject(['entity_id' => ['7'], 'name' => ['Odd'], 'level' => ['2'], 'parent_id' => 3]),
+            new DataObject(['entity_id' => 8, 'name' => 'Orphan', 'level' => '2']),
+        ]));
+        $this->collectionFactory->method('create')->willReturn($this->collection);
+
+        $provider = new CategoryTreeOptionsProvider($this->collectionFactory);
+
+        self::assertSame(
+            [
+                ['value' => '', 'label' => '', 'level' => 0, 'parent' => ''],
+                ['value' => '8', 'label' => 'Orphan', 'level' => 2, 'parent' => '0'],
+            ],
+            $provider->getOptions()
+        );
     }
 }

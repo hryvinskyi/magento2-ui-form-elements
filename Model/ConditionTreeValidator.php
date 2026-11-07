@@ -19,7 +19,7 @@ use Hryvinskyi\UiFormElements\Api\ExpressionBuilderConfigInterface;
  * render paths alike, so it must cost nothing to construct and must never pull adminhtml
  * collaborators into frontend execution.
  */
-final class ConditionTreeValidator implements ConditionTreeValidatorInterface
+class ConditionTreeValidator implements ConditionTreeValidatorInterface
 {
     /**
      * The attribute picker's own field type — component vocabulary, never a loadable class.
@@ -81,7 +81,7 @@ final class ConditionTreeValidator implements ConditionTreeValidatorInterface
     /**
      * Validate one node and, recursively, everything below it.
      *
-     * @param array<int|string, mixed> $node Tree node (combine or leaf)
+     * @param array<int|string,mixed> $node Tree node (combine or leaf)
      * @param list<string> $allowedTypes Condition class names accepted for the `type` key
      * @param int $maxDepth Deepest accepted node level
      * @param int $depth Level of this node; the root node is level one

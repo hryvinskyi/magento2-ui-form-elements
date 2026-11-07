@@ -31,7 +31,7 @@ use Magento\Framework\App\Config\ScopeConfigInterface;
  * free text instead of failing the whole form — the picker must render even when one attribute's
  * EAV setup is unhealthy.
  */
-final class ProductAttributeMetaProvider implements ProductAttributeMetaProviderInterface
+class ProductAttributeMetaProvider implements ProductAttributeMetaProviderInterface
 {
     /**
      * The synthetic rule attribute for category membership — not a real EAV attribute, so the EAV
@@ -120,7 +120,13 @@ final class ProductAttributeMetaProvider implements ProductAttributeMetaProvider
      *
      * @param string $code Attribute code
      * @param bool $suggest Whether the consumer's suggest endpoint accepts this code
-     * @return array{inputType: string, hasOptions: bool, suggest: bool, operatorSet: string|null, scalarType: string|null}
+     * @return array{
+     *     inputType: string,
+     *     hasOptions: bool,
+     *     suggest: bool,
+     *     operatorSet: string|null,
+     *     scalarType: string|null
+     * }
      */
     private function attributeInfo(string $code, bool $suggest): array
     {
@@ -180,14 +186,27 @@ final class ProductAttributeMetaProvider implements ProductAttributeMetaProvider
     private function unitFor(string $inputType): string
     {
         if ($inputType === 'price') {
-            return strtoupper((string)$this->scopeConfig->getValue(self::XML_PATH_BASE_CURRENCY));
+            return strtoupper($this->configCode(self::XML_PATH_BASE_CURRENCY));
         }
 
         if ($inputType === 'weight') {
-            return (string)$this->scopeConfig->getValue(self::XML_PATH_WEIGHT_UNIT);
+            return $this->configCode(self::XML_PATH_WEIGHT_UNIT);
         }
 
         return '';
+    }
+
+    /**
+     * A default-scope config value as a code; an unset value, or one with no string form, reads as ''.
+     *
+     * @param string $path Config path
+     * @return string The configured code, or ''
+     */
+    private function configCode(string $path): string
+    {
+        $value = $this->scopeConfig->getValue($path);
+
+        return is_scalar($value) || $value instanceof \Stringable ? (string)$value : '';
     }
 
     /**

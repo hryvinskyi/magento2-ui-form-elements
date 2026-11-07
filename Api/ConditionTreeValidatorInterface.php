@@ -54,7 +54,7 @@ interface ConditionTreeValidatorInterface
      * handles on its own terms. A childless root node is equally valid — zero children is a
      * legitimate stored state, not an error.
      *
-     * @param array<int|string, mixed> $tree Decoded condition tree (a nested node array), or []
+     * @param array<int|string,mixed> $tree Decoded condition tree (a nested node array), or []
      * @param list<string> $allowedTypes Condition class names the consumer's config declares
      * @param int $maxDepth Deepest accepted node level; the root node is level one
      * @return bool True when the whole tree is safe to hand to loadArray()
@@ -70,7 +70,8 @@ interface ConditionTreeValidatorInterface
      * `childType` instead), so it is skipped rather than whitelisted. The result is deduplicated
      * and reindexed.
      *
-     * @param array<string, mixed> $builderConfig The array {@see ExpressionBuilderConfigInterface::getConfig()} returns
+     * @param array<string,mixed> $builderConfig The array
+     *     {@see ExpressionBuilderConfigInterface::getConfig()} returns
      * @return list<string> Deduplicated condition class names the config can author
      */
     public function allowedTypesFromConfig(array $builderConfig): array;

@@ -5,6 +5,102 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-07
+
+### Added
+- **Layout handle `hryvinskyi_ui_form_elements_expression_builder`.** A form page asks for it with
+  `<update handle="hryvinskyi_ui_form_elements_expression_builder"/>`; it links the admin UI kit's stylesheet,
+  then `expression-builder.css`. A form rendered into a modal through `mui/index/render_handle` has no head of its
+  own, so the page that hosts the modal asks for the handle.
+- `Test/Integration/View/AssetsTest`: the stylesheet, the three Knockout templates and every script of the
+  component resolve through Magento's view-file fallback in the admin, and the handle puts the kit's stylesheet
+  before the builder's in the page head.
+- **A 15-second deadline on every request.** The match count, the value suggestions and the attribute option
+  lists had none: a hung endpoint left the badge on *Counting…*, the suggestion list loading and the value column
+  on *Loading values…* for good. Past the deadline the request is aborted and shows the failure state it already
+  had — *Count unavailable*, an empty suggestion list, the option-less editors. The deadline is a constant of the
+  new `expression-requests` module, not a tunable.
+- **A browser test of the expression builder** (`Test/Js/browser/`, Playwright in Chromium). The component and
+  its templates render on Magento's own RequireJS, Knockout, template engine, bindings and abstract form element
+  in a static harness page that a local server started by the test serves; only `fetch` is stood in. It covers the
+  rendered rule and preview, the ALL/ANY toggle, the dropdowns' ARIA contract under the keyboard, keyboard and
+  pointer reordering with the live-region announcement, the attribute picker's suggest editors, option-list
+  fetch and paste report, the failure state of a request past its deadline, and `destroy()` — the request in flight aborted and its late answer dropped, the pointer capture
+  released, every timer cleared and the computeds disposed. Playwright is pinned in `Test/Js/package.json`, used by
+  nothing else; the README's Testing section says how to install and run it.
+
+### Changed
+- **The builder takes the admin UI kit's look.** Every colour, radius and shadow token (`--ufe-*`) reads the
+  matching kit token (`--hui-*`) and falls back to its 1.1 value, so a page that loads only
+  `expression-builder.css` keeps the admin's greys and borders. The accent is the exception: the Magento orange is
+  gone, and the kit's blue (`#3b63fb`) is both the kit value and the fallback. The text and monospace typefaces follow the same rule through two new
+  tokens, `--ufe-font` and `--ufe-mono`. The dropdown shadow has no kit counterpart and keeps its 1.1 value.
+- The colours the rules still spelled out are tokens now, with the same kit-then-1.1 fallback: `--ufe-surface`
+  (white backgrounds, from `--hui-surface`), `--ufe-on-accent` (the active ALL/ANY toggle's text, from
+  `--hui-on-accent`) and `--ufe-error-bg`/`-line`/`-ink` (the match-count pill when no count is available, from
+  `--hui-error-bg`/`-line`/`-ink`). The select carets are data URIs, which cannot read a custom property, and keep
+  their grey stroke.
+- The accent's five tints (ring, rail, soft, wash, outline) are blue `rgba` values; in browsers with
+  `color-mix()` they are recomputed from the accent in force, so they follow the kit's accent or a consumer's
+  `--ufe-accent`.
+- The builder's root element carries the kit's tokens-only root class `hui-tokens` beside `ufe-expression-builder`.
+- Requires `hryvinskyi/magento2-admin-ui` `^1.0`; `Hryvinskyi_AdminUi` is in the module's sequence. Upgrading
+  enables the kit module: run `bin/magento module:enable Hryvinskyi_AdminUi` and `bin/magento setup:upgrade`.
+- The README's stylesheet step asks consumers to use the layout handle; a bare `<css>` include still works and
+  keeps the admin's greys, borders and radii, with the kit's blue accent in place of the 1.1 orange.
+- The service classes are no longer `final`, so Magento can generate plugins and proxies for them.
+- Values read from the database, a source model or config are rendered only when they have a string form (a scalar
+  or a `Stringable` such as a `Phrase`). Where 1.1 failed with an error or rendered `Array`, the option reader skips
+  such an option value and falls back to the value for such a label, the value suggester skips such a value, the
+  category tree reads such an id as `''` and such a level or parent id as `0`, and the attribute descriptors read
+  such a currency or weight-unit setting as no unit. Every value 1.1 rendered renders the same.
+
+- **`expression-builder.js` is split by concern.** The rules the Knockout component applied now live in eleven
+  pure AMD modules beside it — `expression-config`, `expression-fields`, `expression-condition`,
+  `expression-coherence`, `expression-reorder`, `expression-listbox`, `expression-option-tree`,
+  `expression-list-value`, `expression-preview`, `expression-count`, `expression-remote-options` — each with its
+  own Node suite in `Test/Js`, and `expression-tree`, `expression-value` and `expression-options` gained the
+  structural, serialisation, validation, scalar-editor and option-offer rules the component used to compute
+  itself. The component keeps the observables, the template-bound members, the wording, focus, timers, requests
+  and the pointer drag, and delegates every rule: which value editor a row renders, when the option tree or the
+  type-ahead feeds a dropdown, what a commit does, the size limits, the paste, the summaries and the reorder
+  geometry are each a pure module's answer that the component applies. The templates and every option a consumer passes in its UI component config are
+  unchanged, and so is what the builder does with them; the component's private `_…` methods that moved are gone.
+- The dropdowns' four variants (searchable single-select, option tree, type-ahead suggestions, flat option list)
+  answer through one variant registry in `expression-listbox` instead of a branch per variant in each of the
+  component's dropdown methods: a commit resolves into one action, as a key does through the keyboard pattern,
+  and the component applies it.
+- `expression-tree`'s contradiction check reads each operator's rule from a handler map instead of an
+  `if`/`else if` chain.
+- The pointer drag's DOM work — the handle's pointer capture, the Escape listener, measuring the rendered nodes —
+  moved out of the component into `expression-drag`, an adapter the component delegates to; whether a pointer is
+  over the authoring area is `expression-reorder`'s `insideBox()`. The drag behaves as before.
+- The three requests share one sending path in the component, and the match count's sequence ids are gone: an
+  edit now aborts the count request in flight instead of letting it finish and discarding its answer.
+
+### Fixed
+- A request is aborted when a newer one supersedes it and when the component is destroyed, and its answer is
+  never written. Before, `destroy()` left requests running and their answers were written into the discarded
+  component, and a slow suggest answer for an earlier query could replace the suggestions for the current one.
+- A query too short to ask about now also ends a row's *loading* state; before, a suggest request still in
+  flight could write its suggestions under it.
+- A value spelling an `Object.prototype` member (`constructor`, `toString`, …) is a value like any other. Before,
+  a stored condition of such a type loaded as a row with no field; an option with such a value was never offered
+  by a list editor and showed as a selected pill on an empty value; a tree node with such a value could not be
+  collapsed; a context condition with such a value satisfied every coherence requirement, hiding the
+  missing-context warning; and the contradiction check could report a clash that does not exist.
+- Pasting a list into a list editor did nothing on admin pages: Knockout binds events through jQuery there, so
+  the handler never saw the clipboard, and the text was pasted into the search box as one string. The paste now
+  reads the clipboard from the browser's own event, and the list becomes pills with its report.
+
+### Removed
+- `Test/Unit/AssetIntegrityTest` and `Test/Unit/ModuleBoundaryTest`. Both read the module's own files as text, and
+  the second named modules this package does not depend on. File paths are now checked by the integration test
+  and the JS suite, which loads the pure modules from their real paths, and the template bindings, the dropdowns'
+  ARIA contract and the `destroy()` cleanup by the browser test. Two checks went with them and are kept in review
+  only: that `i18n/en_US.csv` holds exactly the phrases the component renders, and that every `$t` call takes one
+  single-line quoted literal.
+
 ## [1.1.0] - 2026-11-05
 
 ### Added

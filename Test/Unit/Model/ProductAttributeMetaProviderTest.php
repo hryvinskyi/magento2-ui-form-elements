@@ -28,7 +28,7 @@ use PHPUnit\Framework\TestCase;
  * policy publishes. Descriptors are deliberately option-free — the on-demand provider has its own
  * test — so the assertions here also pin that no source model is ever read at describe time.
  */
-final class ProductAttributeMetaProviderTest extends TestCase
+class ProductAttributeMetaProviderTest extends TestCase
 {
     /**
      * @var EavConfig&MockObject
@@ -42,6 +42,8 @@ final class ProductAttributeMetaProviderTest extends TestCase
 
     /**
      * Provider under test.
+     *
+     * @var ProductAttributeMetaProvider
      */
     private ProductAttributeMetaProvider $provider;
 
@@ -153,6 +155,27 @@ final class ProductAttributeMetaProviderTest extends TestCase
     }
 
     /**
+     * A unit setting holding no scalar names no unit rather than leaking a rendered array.
+     *
+     * @return void
+     */
+    public function testUnitSettingWithoutAScalarNamesNoUnit(): void
+    {
+        $this->scopeConfig->method('getValue')->willReturn(['code' => 'dkk']);
+        $this->eavConfig->method('getAttribute')->willReturnCallback(
+            fn (string $entityType, string $code) => match ($code) {
+                'price' => $this->attributeMock(21, 'price'),
+                default => $this->attributeMock(22, 'weight'),
+            }
+        );
+
+        $attributes = $this->provider->getAttributes(['price' => 'Price', 'weight' => 'Weight'], []);
+
+        self::assertSame('', $attributes[0]['unit']);
+        self::assertSame('', $attributes[1]['unit']);
+    }
+
+    /**
      * A non-EAV attribute (id-less, like sku) falls back to text and renders a Phrase label.
      *
      * @return void
@@ -234,7 +257,11 @@ final class ProductAttributeMetaProviderTest extends TestCase
         $descriptor = $attributes[0];
         self::assertSame('text', $descriptor['inputType'], 'The descriptor keeps the real input type.');
         self::assertSame('decimal', $descriptor['operatorSet']);
-        self::assertSame('float', $descriptor['scalarType'], 'The numeric editor no longer has operators to sniff.');
+        self::assertSame(
+            'float',
+            $descriptor['scalarType'] ?? null,
+            'The numeric editor no longer has operators to sniff.'
+        );
     }
 
     /**

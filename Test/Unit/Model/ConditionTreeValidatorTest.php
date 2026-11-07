@@ -20,7 +20,7 @@ use PHPUnit\Framework\TestCase;
  * whose `type` is not in the allowed set, while an empty tree and a childless root both pass —
  * "nothing authored" is a legitimate state, not an attack.
  */
-final class ConditionTreeValidatorTest extends TestCase
+class ConditionTreeValidatorTest extends TestCase
 {
     /**
      * Stand-in condition classes for the allowed set — the validator compares strings, so the
@@ -34,6 +34,8 @@ final class ConditionTreeValidatorTest extends TestCase
 
     /**
      * Validator under test — stateless, so one shared instance is enough.
+     *
+     * @var ConditionTreeValidator
      */
     private ConditionTreeValidator $validator;
 
@@ -64,8 +66,18 @@ final class ConditionTreeValidatorTest extends TestCase
                     'aggregator' => 'any',
                     'value' => '1',
                     'conditions' => [
-                        ['type' => 'Acme\Rule\Condition\Product', 'attribute' => 'sku', 'operator' => '==', 'value' => 'A'],
-                        ['type' => 'Acme\Rule\Condition\Product', 'attribute' => 'name', 'operator' => '{}', 'value' => 'B'],
+                        [
+                            'type' => 'Acme\Rule\Condition\Product',
+                            'attribute' => 'sku',
+                            'operator' => '==',
+                            'value' => 'A',
+                        ],
+                        [
+                            'type' => 'Acme\Rule\Condition\Product',
+                            'attribute' => 'name',
+                            'operator' => '{}',
+                            'value' => 'B',
+                        ],
                     ],
                 ],
             ],

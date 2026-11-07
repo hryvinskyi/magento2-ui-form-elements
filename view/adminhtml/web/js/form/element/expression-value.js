@@ -28,7 +28,13 @@
  *
  * - **Validators** are named `(value) -> Boolean` predicates an operator descriptor picks through
  *   its `validate` key (or a value type through its default `validator`). `registerValidator()`
- *   is the matching mixin seam.
+ *   is the matching mixin seam. `failingValidator()` resolves which validator a row's value
+ *   fails, if any; `isEmptyValue()` says whether a stored value holds anything at all.
+ *
+ * On top of the value types sit the scalar editor's rules: whether a row is in a scalar context
+ * at all, whether its value area renders the generic scalar editor or keeps the type-ahead, what
+ * the editor shows for a stored value and stores for an edit, and what an empty editor still
+ * needs.
  *
  * Everything is side-effect free and dependency-free — plain values in, plain values out — so the
  * same file runs in the admin bundle and under plain Node (`Test/Js/run.mjs`). No user-facing
@@ -518,8 +524,176 @@ define([], function () {
         return entries;
     }
 
+    /* ---------------- advisory validation ---------------- */
+
+    /**
+     * The validator a row's value fails, or null when it passes or nothing validates it.
+     *
+     * Resolution: the selected operator's entry may name a registered validator through its
+     * `validate` key; an operator naming none falls back to the row's scalar value type's default
+     * `validator`. The type name is asked for only in that case, through `typeNameOf`, because
+     * resolving it is the caller's work and an operator that names its own validator never needs
+     * it. An operator naming an unregistered validator validates nothing, so a stale consumer
+     * config degrades to no message instead of a broken editor.
+     *
+     * The answer carries the operator entry's own `validateMessage` when it has one — consumer
+     * wording, already translated — and '' otherwise; choosing the component's own message for a
+     * validator name is presentation.
+     *
+     * @param {Object|null} operatorEntry The row's selected operator descriptor, if any.
+     * @param {Function} typeNameOf Answers the row's scalar type name, or null outside a scalar
+     *     context.
+     * @param {*} value The row's stored value.
+     * @returns {{name: String, message: String}|null}
+     */
+    function failingValidator(operatorEntry, typeNameOf, value) {
+        var name = operatorEntry && operatorEntry.validate ? operatorEntry.validate : null;
+        var typeName;
+        var predicate;
+
+        if (!name) {
+            typeName = typeNameOf();
+            name = typeName === null ? null : valueTypeDef(typeName).validator || null;
+        }
+        predicate = name ? validators[name] : null;
+
+        if (!predicate || predicate(value)) {
+            return null;
+        }
+
+        return {
+            name: name,
+            message: operatorEntry && operatorEntry.validateMessage ? operatorEntry.validateMessage : ''
+        };
+    }
+
+    /**
+     * True when a stored value holds nothing: an empty list, or blank text.
+     *
+     * @param {*} value
+     * @returns {Boolean}
+     */
+    function isEmptyValue(value) {
+        if (Array.isArray(value)) {
+            return value.length === 0;
+        }
+
+        return value === null || value === undefined || String(value).trim() === '';
+    }
+
+    /* ---------------- the scalar editor ---------------- */
+
+    /**
+     * The name of the row's scalar value type, or null when the row is not in a scalar context:
+     * an attribute with a loaded option list, or a membership operator — both keep their pickers.
+     * Otherwise the scalar descriptor resolves through scalarTypeFor(), so an unknown one reads as
+     * plain text and never as a blank editor.
+     *
+     * @param {{hasOptions: Function, usesListOperator: Function, descriptor: Function}} probe
+     *     `descriptor()` answers the descriptor the type is resolved from.
+     * @returns {String|null}
+     */
+    function scalarTypeName(probe) {
+        if (probe.hasOptions() || probe.usesListOperator()) {
+            return null;
+        }
+
+        return scalarTypeFor(probe.descriptor());
+    }
+
+    /**
+     * True when the row's value area renders the generic scalar editor: every scalar type, plain
+     * text included — for it the generic editor IS the free-text input — except plain text on an
+     * attribute whose backend suggests values, which keeps the type-ahead. A typed scalar (number,
+     * date, …) outranks the suggestions. A row whose option list is still on its way renders its
+     * loading state instead of an editor the arriving list would replace.
+     *
+     * @param {{typeName: Function, optionsPending: Function, supportsSuggest: Function}} probe
+     * @returns {Boolean}
+     */
+    function usesScalarEditor(probe) {
+        var name = probe.typeName();
+
+        if (name === null || probe.optionsPending()) {
+            return false;
+        }
+
+        return name !== 'text' || !probe.supportsSuggest();
+    }
+
+    /**
+     * The type the scalar editor renders as — plain text when the row resolves none — and whether
+     * that is free text, which takes the full width and the generic placeholder while a typed
+     * editor is narrowed to its value.
+     *
+     * @param {String|null} typeName From scalarTypeName().
+     * @returns {{type: String, freeText: Boolean}}
+     */
+    function scalarEditorShape(typeName) {
+        var type = typeName || 'text';
+
+        return {type: type, freeText: type === 'text'};
+    }
+
+    /**
+     * What the scalar editor displays for a stored value: the type's `editValue` transform, or the
+     * value as text — null and undefined as ''. Display only, so an untouched stored value is never
+     * rewritten by being shown.
+     *
+     * @param {String|null} typeName From scalarTypeName().
+     * @param {*} raw The stored value.
+     * @returns {String}
+     */
+    function editValueOf(typeName, raw) {
+        var definition = valueTypeDef(typeName);
+
+        if (definition.editValue) {
+            return definition.editValue(raw);
+        }
+
+        return raw === null || raw === undefined ? '' : String(raw);
+    }
+
+    /**
+     * What an edit in the scalar editor stores: the type's `commitValue` transform over the input,
+     * or the input as typed.
+     *
+     * @param {String|null} typeName From scalarTypeName().
+     * @param {String} input The editor's current text.
+     * @returns {*}
+     */
+    function commitValueOf(typeName, input) {
+        var definition = valueTypeDef(typeName);
+
+        return definition.commitValue ? definition.commitValue(input) : input;
+    }
+
+    /**
+     * What a value editor still needs: `none` once a value exists, `several` for an empty editor
+     * that takes a list — a membership operator or a multiselect field — and `one` for any other.
+     * Not a gate: an empty row saves like any other, and this only shapes the nudge under it.
+     *
+     * @param {{value: Function, usesListOperator: Function, valueType: Function}} probe
+     * @returns {('several'|'one'|'none')}
+     */
+    function emptyValueNeeds(probe) {
+        if (!isEmptyValue(probe.value())) {
+            return 'none';
+        }
+
+        return probe.usesListOperator() || probe.valueType() === 'multiselect' ? 'several' : 'one';
+    }
+
     return {
+        scalarTypeName: scalarTypeName,
+        usesScalarEditor: usesScalarEditor,
+        scalarEditorShape: scalarEditorShape,
+        editValueOf: editValueOf,
+        commitValueOf: commitValueOf,
+        emptyValueNeeds: emptyValueNeeds,
         scalarTypeFor: scalarTypeFor,
+        failingValidator: failingValidator,
+        isEmptyValue: isEmptyValue,
         valueTypeDef: valueTypeDef,
         registerValueType: registerValueType,
         validators: validators,

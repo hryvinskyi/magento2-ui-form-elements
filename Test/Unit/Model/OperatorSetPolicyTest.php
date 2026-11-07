@@ -21,10 +21,12 @@ use PHPUnit\Framework\TestCase;
  * notably, multiselect must never regain equality/containment operators, which validators collapse
  * into the same membership check.
  */
-final class OperatorSetPolicyTest extends TestCase
+class OperatorSetPolicyTest extends TestCase
 {
     /**
      * Policy under test — stateless, so one shared instance is enough.
+     *
+     * @var OperatorSetPolicy
      */
     private OperatorSetPolicy $policy;
 
@@ -169,7 +171,8 @@ final class OperatorSetPolicyTest extends TestCase
         self::assertSame(
             ['boolean', 'select', 'multiselect', 'price', 'decimal', 'weight', 'date', 'datetime'],
             array_keys($sets),
-            'One named set per recognised input type — aliases included, since descriptors name the type they were judged by.'
+            'One named set per recognised input type — aliases included, since descriptors name the type'
+            . ' they were judged by.'
         );
 
         foreach ($sets as $inputType => $set) {

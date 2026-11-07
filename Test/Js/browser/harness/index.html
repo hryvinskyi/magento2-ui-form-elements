@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<!--
+  ~ Copyright (c) 2026. Volodymyr Hryvinskyi. All rights reserved.
+  ~ Author: Volodymyr Hryvinskyi <volodymyr@hryvinskyi.com>
+  ~ GitHub: https://github.com/hryvinskyi
+  -->
+<!-- The admin page head, reduced to what the expression builder needs: Magento's RequireJS, its mixins
+     loader and the assembled module config, in the order an admin page loads them; then the builder's
+     stylesheet; then the harness script that mounts the element. -->
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Expression builder harness</title>
+    <script src="/static/requirejs/require.js"></script>
+    <script>require.config({baseUrl: '/static/'});</script>
+    <script src="/static/mage/requirejs/mixins.js"></script>
+    <script src="/static/requirejs-config.js"></script>
+    <link rel="stylesheet" href="/static/Hryvinskyi_UiFormElements/css/expression-builder.css">
+    <script src="/harness/harness.js"></script>
+</head>
+<body>
+</body>
+</html>
