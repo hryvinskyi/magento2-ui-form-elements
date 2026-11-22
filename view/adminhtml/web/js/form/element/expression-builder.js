@@ -580,8 +580,13 @@ define([
             // The pending focus deferral, if any — see _focusLater.
             this._focusTimer = null;
 
+            // True while loadStoredValue() writes the field value itself, so the outside-write
+            // subscription does not answer that write by loading it a second time.
+            this._loadingValue = false;
+
             this._loadFromValue();
             this._bindAutoSave();
+            this._bindOutsideValue();
             this._bindMatchCount();
             this._preloadPreviewTemplate();
 
@@ -631,12 +636,12 @@ define([
         /* ---------------- teardown ---------------- */
 
         /**
-         * Registers a computed for disposal and hands it straight back, so a computed can be
-         * created, tracked and assigned in one expression — the only shape that makes forgetting
-         * one visible at the creation site.
+         * Registers a computed — or a subscription, which is disposed the same way — for disposal
+         * and hands it straight back, so it can be created, tracked and assigned in one expression —
+         * the only shape that makes forgetting one visible at the creation site.
          *
-         * @param {Object} computed A ko.computed.
-         * @returns {Object} The same computed.
+         * @param {Object} computed A ko.computed or a subscription.
+         * @returns {Object} The same object.
          */
         _disposable: function (computed) {
             this._disposables.push(computed);
@@ -4274,6 +4279,30 @@ define([
         },
 
         /**
+         * Replaces the authored rule with the one a stored value describes: the field value becomes the
+         * given one and the tree is rebuilt from it, as on initialisation. The auto-save then writes the
+         * rebuilt tree's own serialisation back, which can differ from the given text but not in meaning.
+         *
+         * The rows being replaced lose their pending timers and any drag in flight first, so nothing
+         * scheduled for the old tree fires into rows nothing renders any more.
+         *
+         * @param {*} value Stored value: a JSON string, a decoded tree, or '' for no rule.
+         * @returns {void}
+         */
+        loadStoredValue: function (value) {
+            this._loadingValue = true;
+
+            try {
+                this._releaseDrag();
+                this._clearRowTimers(this.rootGroup());
+                this.value(value);
+                this._loadFromValue();
+            } finally {
+                this._loadingValue = false;
+            }
+        },
+
+        /**
          * Builds the view-model tree for a plain model group.
          *
          * @param {Object} modelGroup Group node from the tree module.
@@ -4812,6 +4841,29 @@ define([
         },
 
         /* ---------------- Auto-save into the form's data scope ---------------- */
+
+        /**
+         * Makes the tree follow a field value written from outside after initialisation: a form
+         * reset() back to the initial value, clear(), or a provider value that reaches the field
+         * through its link after initialize() ran. Without this the field would hold one rule while
+         * the builder shows another, and the next edit would silently overwrite the outside value.
+         *
+         * A write is outside when it is not the tree's own serialisation and not loadStoredValue()'s
+         * own write. The auto-save computed always writes exactly what serialise() returns at that
+         * moment, so its writes never reload the tree; loading then makes the auto-save write the
+         * rebuilt tree's serialisation, which again matches, so a load cannot loop.
+         *
+         * @returns {void}
+         */
+        _bindOutsideValue: function () {
+            this._disposable(this.value.subscribe(function (value) {
+                if (this._loadingValue || value === this.serialise()) {
+                    return;
+                }
+
+                this.loadStoredValue(value);
+            }, this));
+        },
 
         /**
          * Keeps the form field in sync with the authored tree.

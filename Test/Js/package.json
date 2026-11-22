@@ -1,11 +1,13 @@
 {
   "name": "hryvinskyi-ui-form-elements-browser-tests",
   "private": true,
-  "description": "Browser component tests of the expression builder, run in Chromium by Playwright.",
+  "description": "Browser component tests of the expression builder, run in Chromium by Playwright, and the type check of the public mount's TypeScript declaration.",
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test",
+    "check-types": "tsc --noEmit -p types/tsconfig.json"
   },
   "devDependencies": {
-    "@playwright/test": "1.65.0"
+    "@playwright/test": "1.65.0",
+    "typescript": "7.0.2"
   }
 }

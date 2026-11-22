@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-11-22
+
+### Added
+- **A public mount: `Hryvinskyi_UiFormElements/js/expression-builder/mount`.** `mount(host, options, onChange)`
+  renders the expression builder into any element of an admin page, outside a ui_component form, and returns
+  `{setValue(value), destroy()}`. The builder is created the way a form creates it (the layout processor, the
+  registry and the `scope` binding) into an element of its own inside the host. One builder per host: mounting
+  again returns the handle the host has. `onChange` hears each edit once, and never the value the builder was
+  given nor its rewrite of that value. `setValue` loads a different value and ignores the one the builder holds,
+  and a call made before the builder exists is applied once it does. `destroy` disposes the builder, removes what
+  it rendered and frees the registry name; it is idempotent and safe before the builder exists. The options are
+  `value`, `builderConfig`, an optional registry `name`, `label` and the component's tunables; any other key
+  throws a `TypeError` naming it. The README's *Mounting outside a form* section has the whole contract.
+- `types/mount.d.ts`: the TypeScript declaration of the public mount under its RequireJS id, for a TypeScript
+  consumer that loads the module through the page's RequireJS and imports the types with `import type`. No `any`.
+- `loadStoredValue(value)` on the Knockout component: replaces the authored rule with the one a stored value
+  describes, after clearing the pending timers and any drag of the rows it replaces.
+- Tests: `mount-options` and `value-sync` suites in the Node runner, `browser/mount.spec.mjs` in the browser
+  suite, and `npm run check-types` in `Test/Js`, which compiles a strict consumer of the declaration.
+  TypeScript is pinned in `Test/Js/package.json`.
+
+### Fixed
+- **The tree follows a field value written from outside.** A form's `reset()`, `clear()`, or a provider value
+  that reached the field after the builder was created changed the field value but not the tree, so the builder
+  showed one rule while the field held another, and the next edit overwrote the outside value. Such a write now
+  reloads the tree through `loadStoredValue()`. The builder's own auto-save writes are recognised (they equal the
+  tree's serialisation) and never reload it.
+
 ## [1.2.0] - 2026-11-07
 
 ### Added

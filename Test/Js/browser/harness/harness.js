@@ -13,6 +13,9 @@
  *   renders it through `getTemplate()` with Magento's template engine — and resolves once the
  *   component exists;
  * - `builder()` is the mounted component;
+ * - `mountPublic(hostId, options)` mounts a builder through the module's public mount function
+ *   instead, the way a page outside a form does; `handle(hostId)` is the handle it returned and
+ *   `reported(hostId)` every value it passed to the change callback;
  * - `requests()` lists the requests the component sent, and `answer(index, status, body)` delivers
  *   the response to one of them.
  *
@@ -37,8 +40,11 @@
     var realSetTimeout = window.setTimeout.bind(window);
     var BUILDER_NAME = 'harness_builder';
     var BUILDER_COMPONENT = 'Hryvinskyi_UiFormElements/js/form/element/expression-builder';
+    var PUBLIC_MOUNT = 'Hryvinskyi_UiFormElements/js/expression-builder/mount';
     var sent = [];
     var mounted = null;
+    var handles = {};
+    var reports = {};
     var abortHonoured = false;
 
     window.fetch = function (url, init) {
@@ -96,8 +102,113 @@
         });
     }
 
+    /**
+     * Mounts one expression builder through the module's public mount function into the element
+     * with the given id, creating it when the page has none. The handle mount() returns and every
+     * value it reports are kept under that id.
+     *
+     * @param {string} hostId
+     * @param {Object} options The options mount() takes.
+     * @returns {Promise<void>} Resolves once mount() has returned.
+     */
+    function mountPublic(hostId, options) {
+        return publicMount().then(function (api) {
+            reports[hostId] = [];
+            handles[hostId] = api.mount(hostFor(hostId), options, function (value) {
+                reports[hostId].push(value);
+            });
+        });
+    }
+
+    /**
+     * @returns {Promise<Object>} The public mount module.
+     */
+    function publicMount() {
+        return new Promise(function (resolve, reject) {
+            require([PUBLIC_MOUNT], resolve, reject);
+        });
+    }
+
+    /**
+     * @param {string} hostId
+     * @returns {HTMLElement} The element with the id, appended to the page when it has none.
+     */
+    function hostFor(hostId) {
+        var host = document.getElementById(hostId);
+
+        if (host === null) {
+            host = document.createElement('section');
+            host.id = hostId;
+            document.body.appendChild(host);
+        }
+
+        return host;
+    }
+
     window.expressionBuilderHarness = {
         mount: mount,
+        mountPublic: mountPublic,
+
+        /**
+         * Calls the public mount() again on a host that holds a builder.
+         *
+         * @param {string} hostId
+         * @param {Object} options
+         * @returns {Promise<boolean>} Whether it returned the handle the host already had.
+         */
+        mountPublicAgain: function (hostId, options) {
+            return publicMount().then(function (api) {
+                return api.mount(hostFor(hostId), options, function () {}) === handles[hostId];
+            });
+        },
+
+        /**
+         * Calls the public mount() and gives back the message of what it throws.
+         *
+         * @param {string} hostId
+         * @param {*} options
+         * @param {*} onChange
+         * @returns {Promise<string>} `<error name>: <message>`, or '' when it threw nothing.
+         */
+        mountPublicError: function (hostId, options, onChange) {
+            return publicMount().then(function (api) {
+                try {
+                    api.mount(hostFor(hostId), options, onChange);
+                } catch (error) {
+                    return error.name + ': ' + error.message;
+                }
+
+                return '';
+            });
+        },
+
+        /**
+         * @param {string} hostId
+         * @returns {{setValue: function(string): void, destroy: function(): void}} The handle mount() returned.
+         */
+        handle: function (hostId) {
+            return handles[hostId];
+        },
+
+        /**
+         * @param {string} hostId
+         * @returns {string[]} Every value the builder in that host reported, in order.
+         */
+        reported: function (hostId) {
+            return reports[hostId].slice();
+        },
+
+        /**
+         * @param {string} name
+         * @returns {Promise<boolean>} Whether the registry holds an entry under the name.
+         */
+        registryHas: function (name) {
+            return new Promise(function (resolve, reject) {
+                require(['uiRegistry'], function (registry) {
+                    resolve(registry.has(name));
+                }, reject);
+            });
+        },
 
         /**
          * @returns {Object} The mounted component.

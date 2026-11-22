@@ -771,6 +771,108 @@ test.describe('paste report', () => {
     });
 });
 
+test.describe('a field value written from outside after initialisation', () => {
+    /**
+     * A stored rule of one Colour condition.
+     *
+     * @param {string} colour
+     * @returns {string}
+     */
+    const colourRule = (colour) => JSON.stringify({
+        type: 'test/combine',
+        attribute: null,
+        operator: null,
+        value: '1',
+        is_value_processed: null,
+        aggregator: 'all',
+        conditions: [{type: 'colour', attribute: 'colour', operator: '==', value: colour, is_value_processed: null}]
+    });
+
+    /**
+     * Starts recording every value the element's field takes from now on.
+     *
+     * @param {import('@playwright/test').Page} page
+     * @returns {Promise<void>}
+     */
+    const recordWrites = (page) => page.evaluate(() => {
+        const writes = [];
+
+        window.expressionBuilderHarness.builder().value.subscribe((value) => writes.push(value));
+        window.expressionBuilderHarnessWrites = writes;
+    });
+
+    /**
+     * @param {import('@playwright/test').Page} page
+     * @returns {Promise<string[]>} Every value the field took since recordWrites().
+     */
+    const writes = (page) => page.evaluate(() => window.expressionBuilderHarnessWrites.slice());
+
+    /**
+     * @param {import('@playwright/test').Page} page
+     * @returns {Promise<void>}
+     */
+    const settle = (page) => page.evaluate(() => window.expressionBuilderHarness.settled(100));
+
+    test('is shown by the tree, and an edit afterwards is written once', async ({page, builder}) => {
+        await builder.mount(builderElementConfig({builderConfig: {countUrl: ''}}));
+
+        await page.evaluate((value) => window.expressionBuilderHarness.builder().value(value), colourRule('blue'));
+
+        const value = page.locator('select[aria-label="Value"]');
+
+        await expect(fieldSelects(page)).toHaveCount(1);
+        await expect(value).toHaveValue('blue');
+        await expect(page.locator('.ufe-expr__preview')).toHaveText('Colour is Blue');
+        await settle(page);
+        expect((await builder.storedRule()).conditions[0].value).toBe('blue');
+
+        await recordWrites(page);
+        await value.selectOption('green');
+        await settle(page);
+
+        const written = await writes(page);
+
+        expect(written).toHaveLength(1);
+        expect(JSON.parse(written[0]).conditions[0].value).toBe('green');
+        await expect(value).toHaveValue('green');
+    });
+
+    test('reset() brings the tree back to the rule the field started with', async ({page, builder}) => {
+        await builder.mount(builderElementConfig({builderConfig: {countUrl: ''}}));
+
+        const all = rootHeader(page).getByRole('button', {name: 'Match ALL conditions in this group'});
+
+        await rootHeader(page).getByRole('button', {name: 'Match ANY one condition in this group'}).click();
+        await page.getByRole('button', {name: '+ Add condition'}).last().click();
+        await expect(fieldSelects(page)).toHaveCount(7);
+        await settle(page);
+
+        await page.evaluate(() => window.expressionBuilderHarness.builder().reset());
+
+        await expect(fieldSelects(page)).toHaveCount(6);
+        await expect(all).toHaveAttribute('aria-pressed', 'true');
+        expect(await rowFieldTypes(page)).toEqual(['colour', 'size', 'name', 'section', 'code', PICKER]);
+        await settle(page);
+        expect((await builder.storedRule()).aggregator).toBe('all');
+    });
+
+    test('the builder\'s own writes never rebuild the tree', async ({page, builder}) => {
+        await builder.mount(builderElementConfig({builderConfig: {countUrl: ''}}));
+
+        await page.evaluate(() => {
+            document.querySelector('.ufe-expr__row').dataset.marked = 'yes';
+        });
+        await recordWrites(page);
+        await rowOf(page, 'colour').locator('select[aria-label="Value"]').selectOption('green');
+        await page.getByRole('button', {name: '+ Add condition'}).last().click();
+        await settle(page);
+
+        await expect(page.locator('.ufe-expr__row').first()).toHaveAttribute('data-marked', 'yes');
+        await expect(fieldSelects(page)).toHaveCount(7);
+        expect(await writes(page)).toHaveLength(2);
+    });
+});
+
 test.describe('destroy()', () => {
     test('aborts the request in flight, and its late answer writes nothing', async ({page, builder}) => {
         await builder.mount(builderElementConfig());

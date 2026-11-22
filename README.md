@@ -29,6 +29,9 @@ builder. This element is that builder, once.
 |---|---|
 | `view/adminhtml/web/js/form/element/expression-builder.js` | the Knockout component — presentation only |
 | `view/adminhtml/web/js/form/element/expression-*.js` | the modules the component delegates to, one concern each: the pure rules, and the pointer drag's DOM adapter `expression-drag.js` (see [Module layout](#module-layout)) |
+| `view/adminhtml/web/js/expression-builder/mount.js` | the public mount: renders the builder into any element of an admin page, outside a form (see [Mounting outside a form](#mounting-outside-a-form)) |
+| `view/adminhtml/web/js/expression-builder/mount-options.js`, `value-sync.js` | the mount's pure rules: which options pass and the registry name, and when a value is reported or loaded |
+| `types/mount.d.ts` | TypeScript declaration of the public mount, under its RequireJS id |
 | `view/adminhtml/web/template/form/element/expression-builder.html` | the element's outer template |
 | `view/adminhtml/web/template/form/element/expression-group.html` | one group, recursing into child groups |
 | `view/adminhtml/web/template/form/element/expression-preview.html` | one preview node, recursing likewise |
@@ -764,6 +767,86 @@ layout cannot link a stylesheet. The page that hosts the modal asks for the hand
    an arbitrary attribute code reach a collection filter. If you can count what your rule matches, add
    a `countUrl` endpoint answering `{count, capped}` with a server-side cap.
 
+#### Mounting outside a form
+
+A page that is not a ui_component form — a Preact island, a plain admin template — mounts the builder
+through `Hryvinskyi_UiFormElements/js/expression-builder/mount`:
+
+```js
+require(['Hryvinskyi_UiFormElements/js/expression-builder/mount'], function (api) {
+    var handle = api.mount(host, {
+        value: storedRule,             // the stored rule as JSON, '' for none
+        builderConfig: builderConfig,  // what your ExpressionBuilderConfigInterface publishes
+        label: 'Only when',            // any tunable from the table above; nothing else
+        joinerStyle: 'rail'
+    }, function (value) {
+        // each value an edit in the builder produces
+    });
+
+    handle.setValue(otherRule);        // show another rule
+    handle.destroy();                  // dispose the builder and remove what it rendered
+});
+```
+
+`mount(host, options, onChange)` returns `{setValue(value), destroy()}`:
+
+- **Where it renders.** The builder is created the way a form creates it — the layout processor
+  instantiates the component under a registry name and Magento's `scope` binding renders its template —
+  into an element of its own appended to `host`; the host's attributes and other children stay yours.
+  The call is safe at any time once the host exists, before or after `DOMContentLoaded`. The builder is
+  created a moment later, once RequireJS has the component.
+- **Options.** `value` (a string) and `builderConfig` (an object) are required; `name` picks the registry
+  name (a letter, then letters, digits, `_` or `-`; one already in use is refused), and without it a free
+  one is generated. The tunables of [Component tunables](#component-tunables-defaults) and `label` (the
+  heading) may be set. Any other key — a misspelt tunable, or a framework key such as `template` or
+  `provider` that would wire the builder into a form that is not there — throws a `TypeError` naming it.
+- **One builder per host.** Mounting into a host that already holds one returns the handle it has; the
+  first call's options and callback stay in force until that handle is destroyed.
+- **`onChange`** hears each value an edit produces, once. It never hears the value the builder was given —
+  at mount or through `setValue` — nor the builder's rewrite of that value into its own serialisation
+  (key order, number formats), so a caller that marks its document dirty on each report does not turn
+  dirty when it opens.
+- **`setValue`** loads a different value and rebuilds the rule. The value the builder already holds, the
+  last edit it reported, and the raw value last handed in are ignored, so passing the same value on every
+  render does not rebuild the rule under the person editing it. A call before the builder exists is
+  applied once it does.
+- **`destroy`** disposes the builder (computeds, timers, requests in flight, a drag in progress), cleans
+  and removes the element it rendered into, and frees the registry name. It is idempotent, and safe
+  before the builder exists: the builder is disposed as it arrives.
+
+The page still needs the stylesheets: the kit's `admin-ui.css` and `expression-builder.css` (the layout
+handle above, or the page's own way of loading styles).
+
+**TypeScript.** `types/mount.d.ts` declares the module under its RequireJS id. Add the file to your
+compilation (`files` or `include` in the tsconfig, or a triple-slash reference) and import the types with
+`import type`, which leaves nothing behind in your bundle; load the module through the page's RequireJS:
+
+```ts
+import type {
+    ExpressionBuilderHandle,
+    ExpressionBuilderMountModule
+} from 'Hryvinskyi_UiFormElements/js/expression-builder/mount';
+
+type RequireMount = (
+    dependencies: readonly ['Hryvinskyi_UiFormElements/js/expression-builder/mount'],
+    loaded: (module: ExpressionBuilderMountModule) => void,
+    failed: (error: Error) => void
+) => void;
+```
+
+The declaration types `builderConfig` as `Readonly<Record<string, unknown>>`: the component reads and
+checks it itself, so it is passed through as the server sent it. It holds no `any`.
+
+The Knockout component itself has one public method for this: `loadStoredValue(value)` replaces the
+authored rule with the one a stored value describes, after clearing the pending timers and any drag of
+the rows it replaces.
+
+**The tree follows the field value.** A value written into the field from outside after the builder was
+created — a form's `reset()` back to the initial value, `clear()`, a provider value that reaches the field
+through its link after `initialize()` — is loaded into the tree the same way. A write is outside when it
+is neither the tree's own serialisation nor `loadStoredValue()`'s own write, so the builder's auto-save
+never reloads the tree and a load cannot loop.
+
 ## Module layout
 
 The front end splits by concern into dependency-light AMD modules — never a util grab-bag. No module but
@@ -824,6 +907,13 @@ handed it as an argument.
   pointer capture, the Escape listener, measuring rendered nodes by id). The document is handed in, so it
   runs under Node against a recording document. Where a node may go stays in `expression-reorder.js`. No
   dependencies.
+- **`expression-builder/mount-options.js`** — what the public mount passes to the component (the stored
+  value, the builder config and the documented tunables; any other key refused by name) and the registry
+  name it creates the builder under. No dependencies.
+- **`expression-builder/value-sync.js`** — when a mounted builder's value is reported to its caller and when
+  a value the caller hands in is loaded, so neither direction echoes. No dependencies.
+- **`expression-builder/mount.js`** — the public mount, an adapter: it binds the two modules above to the
+  layout processor, the registry and Knockout.
 - **`expression-builder.js`** — the Knockout component, **presentation only**: observables, the members
   the templates bind, focus, timers, sending the requests, the pointer drag's state. It asks the modules
   above for every decision and applies the answer. Every user-facing phrase lives here (or arrives
@@ -845,9 +935,11 @@ it:
 node app/code/Hryvinskyi/UiFormElements/Test/Js/run.mjs
 ```
 
-Run it from the repo root; it prints one line per suite and exits non-zero on failure. The Knockout
-component itself is not run there: it depends on browser-only Magento AMD modules
-(`Magento_Ui/js/form/element/abstract`, `ko`, `mage/translate`). The browser suite below runs it.
+Run it from the repo root; it prints one line per suite and exits non-zero on failure. The public mount's
+two pure modules (`mount-options.js`, `value-sync.js`) run there too. The Knockout component and the mount
+itself are not run there: they depend on browser-only Magento AMD modules
+(`Magento_Ui/js/form/element/abstract`, `ko`, `mage/translate`, `uiLayout`, `uiRegistry`). The browser
+suite below runs them.
 
 **Browser.** `Test/Js/browser/` renders the real component in Chromium, driven by Playwright. A static
 harness page loads it the way an admin form does — Magento's own RequireJS from `lib/web`, the module
@@ -879,6 +971,17 @@ test runs the same sequence without `destroy()` to show the timers do fire. A te
 error or a warning, throws, or asks for a missing file, so a template binding that names a member the
 component lacks fails the suite.
 
+`browser/mount.spec.mjs` mounts the builder through the public mount into plain elements of the harness
+page: it renders inside the host and leaves the host's own class and children alone, reports an edit once
+and neither the value it was given nor its rewrite of it, `setValue` loads a different rule without
+reporting it and rebuilds nothing for the value the builder holds, a `setValue` before the builder exists
+is applied once it does, a host holds one builder, two hosts get two registry names and a name in use is
+refused, refused options throw before anything renders, and `destroy` removes what it rendered and the
+registry entry, frees the host and the name, and — called before the builder exists — disposes it as it
+arrives, leaving no request open. In `expression-builder.spec.mjs`, a field value written from outside after
+the element exists is shown by the tree and the next edit is written once, `reset()` brings back the rule the
+field started with, and the builder's own writes never rebuild the tree.
+
 Playwright is a development dependency of `Test/Js/package.json` alone, pinned, with its lock file;
 `node_modules` and Playwright's output are ignored by git and left out of the package archive. Once:
 
@@ -893,6 +996,12 @@ Then, from the same directory:
 ```
 npx playwright test
 ```
+
+**Types.** `npm run check-types` in the same directory compiles a consumer of `types/mount.d.ts` under
+`strict` and the stricter flags a TypeScript island uses; it fails when the declaration stops accepting
+what a consumer writes, or starts accepting a value that is not a string, options without a builder
+config, a joiner style the component does not draw, a handle without `destroy`, or a change callback that
+does not take the stored value. TypeScript is pinned in `Test/Js/package.json` next to Playwright.
 
 **Unit.** The shared PHP services, against Composer's autoloader without booting Magento:
 

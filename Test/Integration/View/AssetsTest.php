@@ -63,7 +63,17 @@ class AssetsTest extends TestCase
     ];
 
     /**
-     * The builder's stylesheet, the three templates its component names, and every script the component loads
+     * The public mount and the modules it depends on, by the name RequireJS asks for them under
+     */
+    private const MOUNT_SCRIPTS = [
+        'mount',
+        'mount-options',
+        'value-sync',
+    ];
+
+    /**
+     * The builder's stylesheet, the three templates its component names, every script the component loads, and
+     * the public mount's scripts
      *
      * @return array<string, array{string}>
      */
@@ -77,6 +87,9 @@ class AssetsTest extends TestCase
         ];
         foreach (self::SCRIPTS as $script) {
             $files[$script . ' script'] = ['Hryvinskyi_UiFormElements::js/form/element/' . $script . '.js'];
+        }
+        foreach (self::MOUNT_SCRIPTS as $script) {
+            $files[$script . ' script'] = ['Hryvinskyi_UiFormElements::js/expression-builder/' . $script . '.js'];
         }
 
         return $files;

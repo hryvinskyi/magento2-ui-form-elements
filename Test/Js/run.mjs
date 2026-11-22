@@ -13,8 +13,9 @@
  * expression-tree.js gets the underscore stub. The two modules that drive the platform —
  * expression-requests.js (abort controllers and timers) and expression-drag.js (the document and
  * a drag handle) — receive it as an argument, so their suites hand them Node's AbortController, a
- * hand-cranked timer and a recording document. The component (expression-builder.js) depends on
- * browser-only Magento AMD modules and cannot run here.
+ * hand-cranked timer and a recording document. The public mount's two pure modules, mount-options.js
+ * and value-sync.js, are loaded the same way. The component (expression-builder.js) and the mount
+ * itself (mount.js) depend on browser-only Magento AMD modules and cannot run here.
  */
 import {readFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
@@ -37,6 +38,8 @@ import {buildTests as buildCountTests} from './expression-count.test.mjs';
 import {buildTests as buildRemoteOptionsTests} from './expression-remote-options.test.mjs';
 import {buildTests as buildRequestsTests} from './expression-requests.test.mjs';
 import {buildTests as buildDragTests} from './expression-drag.test.mjs';
+import {buildTests as buildMountOptionsTests} from './mount-options.test.mjs';
+import {buildTests as buildValueSyncTests} from './value-sync.test.mjs';
 
 const moduleDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -44,6 +47,11 @@ const moduleDir = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
  * AMD id prefix of this module's form-element scripts.
  */
 const ID_PREFIX = 'Hryvinskyi_UiFormElements/js/form/element/';
+
+/**
+ * AMD id prefix of the public mount's scripts.
+ */
+const MOUNT_ID_PREFIX = 'Hryvinskyi_UiFormElements/js/expression-builder/';
 
 /**
  * Dependencies the loaded modules may ask for: the underscore stub, then every module loaded so
@@ -84,6 +92,26 @@ const remoteOptions = loadElementModule('expression-remote-options');
 const requests = loadElementModule('expression-requests');
 const drag = loadElementModule('expression-drag');
 
+/**
+ * Reads and evaluates one AMD source below view/adminhtml/web/js/expression-builder — the public
+ * mount's pure modules; the mount itself drives Knockout and the registry and runs in the browser
+ * suite — and registers it under its AMD id.
+ *
+ * @param {String} name Module name, without the .js extension.
+ * @returns {*} The module's export object.
+ */
+function loadMountModule(name) {
+    const sourcePath = resolve(moduleDir, 'view/adminhtml/web/js/expression-builder', name + '.js');
+    const exported = loadAmdModule(readFileSync(sourcePath, 'utf8'), registry);
+
+    registry[MOUNT_ID_PREFIX + name] = exported;
+
+    return exported;
+}
+
+const mountOptions = loadMountModule('mount-options');
+const valueSync = loadMountModule('value-sync');
+
 const suites = [
     {name: 'expression-tree', tests: buildTreeTests(tree)},
     {name: 'expression-value', tests: buildValueTests(value)},
@@ -100,7 +128,9 @@ const suites = [
     {name: 'expression-count', tests: buildCountTests(count)},
     {name: 'expression-remote-options', tests: buildRemoteOptionsTests(remoteOptions)},
     {name: 'expression-requests', tests: buildRequestsTests(requests)},
-    {name: 'expression-drag', tests: buildDragTests(drag)}
+    {name: 'expression-drag', tests: buildDragTests(drag)},
+    {name: 'mount-options', tests: buildMountOptionsTests(mountOptions)},
+    {name: 'value-sync', tests: buildValueSyncTests(valueSync)}
 ];
 
 let failed = 0;
